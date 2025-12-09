@@ -91,11 +91,28 @@ print(
 )
 
 
-python3 download_data.py raw \
---video_id_csv my_filtered_raw.csv \
---download_dir /tmp/arkit_faro \
---raw_dataset_assets mesh
+# python3 download_data.py raw \
+# --video_id_csv my_filtered_raw.csv \
+# --download_dir /tmp/arkit_faro \
+# --raw_dataset_assets mesh
+
+# Works
+# python3 download_data.py raw --split Validation --video_id 41069043 \
+# --download_dir /dss/dssmcmlfs01/pn34sa/pn34sa-dss-0000/aydemir --raw_dataset_assets mesh
+
+# Works
+# python3 download_data.py raw --split Training --video_id 47333462 \
+# --download_dir /dss/dssmcmlfs01/pn34sa/pn34sa-dss-0000/aydemir --download_laser_scanner_point_cloud
 
 
-python3 download_data.py raw --split Training --video_id 381649 \
---download_dir /dss/dssmcmlfs01/pn34sa/pn34sa-dss-0000/aydemir --download_laser_scanner_point_cloud
+# Works
+# python3 download_data.py raw --split Training --video_id 47333462 \
+# --download_dir /dss/dssmcmlfs01/pn34sa/pn34sa-dss-0000/aydemir --raw_dataset_assets mesh
+
+# Does not work
+# python3 download_data.py raw --split Validation --video_id 41069043 \
+# --download_dir /dss/dssmcmlfs01/pn34sa/pn34sa-dss-0000/aydemir --download_laser_scanner_point_cloud
+
+# Does not work
+# python3 download_data.py raw --split Validation --video_id 42898527 \
+# --download_dir /dss/dssmcmlfs01/pn34sa/pn34sa-dss-0000/aydemir --download_laser_scanner_point_cloud

@@ -589,7 +589,8 @@ def main_vsi_bench_loop(mesh_base_dir=MESH_BASE_DIR, num_steps_per_question=NUM_
             choices=choices,
             num_steps=num_steps_per_question,
             question_id=q_idx,
-            experiment_base_dir=str(exp_base_dir.parent)
+            experiment_base_dir=str(exp_base_dir.parent),
+            scene_id=scene_id
         )
         
         # Check correctness
@@ -627,13 +628,18 @@ def main_vsi_bench_loop(mesh_base_dir=MESH_BASE_DIR, num_steps_per_question=NUM_
         json.dump(results, f, indent=2)
     print(f"\n[INFO] Results saved to: {results_file}")
 
-def run_pipeline(mesh_path: Path, question="", choices=None, cache_dir=CACHE_DIR, num_steps=NUM_STEPS, question_id=0, experiment_base_dir="experiment_logs"):
+def run_pipeline(mesh_path: Path, question="", choices=None, cache_dir=CACHE_DIR, num_steps=NUM_STEPS, question_id=0, experiment_base_dir="experiment_logs", scene_id=None):
     """
     Run the reasoning pipeline for a single question.
     Returns the model's final answer (A, B, C, D, etc.)
     """
     if choices is None:
         choices = []
+    
+    # Extract scene_id from mesh_path if not provided
+    if scene_id is None:
+        # mesh_path format: .../Validation|Training/{video_id}/{video_id}_3dod_mesh.ply
+        scene_id = mesh_path.parent.name
     
     run_ts = timestamp_str()
     # Create nested directory: experiment_logs/YYYYMMDD_HHMMSS/q00X

@@ -35,11 +35,12 @@ for folder in subfolders:
     output_folder = os.path.join(output_base, mesh_name)
     os.makedirs(output_folder, exist_ok=True)
 
-    # Set up offscreen renderer
+    # Create renderer ONCE per mesh and reuse with proper reset
     renderer = o3d.visualization.rendering.OffscreenRenderer(width, height)
     mat = o3d.visualization.rendering.MaterialRecord()
     mat.shader = "defaultLit"
     renderer.scene.add_geometry("mesh", mesh, mat)
+    renderer.scene.set_lighting(o3d.visualization.rendering.Open3DScene.LightingProfile.SOFT_SHADOWS, (0.5, 0.5, 0.5))
 
     # Four views: rotate around vertical axis
     for i, angle_deg in enumerate([0, 90, 180, 270]):
@@ -48,12 +49,44 @@ for folder in subfolders:
         look_dir = np.array([np.cos(angle_rad), np.sin(angle_rad), 0])
         up_dir = np.array([0, 0, 1])
         look_at = cam_pos + look_dir
-        renderer.scene.camera.look_at(look_at, cam_pos, up_dir)
-
+        
+        # Set up proper camera with intrinsics and extrinsics
+        cx = width / 2.0
+        cy = height / 2.0
+        intrinsic = o3d.camera.PinholeCameraIntrinsic(width, height, 400.0, 400.0, cx, cy)
+        
+        # Build camera-to-world matrix
+        forward = look_at - cam_pos
+        forward_norm = np.linalg.norm(forward)
+        if forward_norm > 1e-8:
+            forward = forward / forward_norm
+        right = np.cross(up_dir, forward)
+        right_norm = np.linalg.norm(right)
+        if right_norm > 1e-8:
+            right = right / right_norm
+        true_up = np.cross(forward, right)
+        
+        cam_pose_world = np.eye(4, dtype=np.float64)
+        cam_pose_world[:3, 0] = right
+        cam_pose_world[:3, 1] = true_up
+        cam_pose_world[:3, 2] = forward
+        cam_pose_world[:3, 3] = cam_pos
+        
+        extrinsic_world_to_cam = np.linalg.inv(cam_pose_world)
+        renderer.setup_camera(intrinsic, extrinsic_world_to_cam)
+        
+        renderer.scene.set_background([1.0, 1.0, 1.0, 1.0])
+        
         # Render and save
         img = renderer.render_to_image()
         img_path = os.path.join(output_folder, f"view_{i+1}.png")
         o3d.io.write_image(img_path, img)
 
-    #renderer.release()
     print(f"Rendered 4 views for {mesh_file} -> {output_folder}")
+    
+    # Clean up renderer and mesh for this iteration
+    del renderer
+    del mesh
+    del img
+    import gc
+    gc.collect()
