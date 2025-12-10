@@ -30,18 +30,101 @@ ARKIT_CSV_PATH = "/dss/dsshome1/06/di38riq/ARKitScenes/raw/raw_train_val_splits.
 METADATA_CSV_PATH = "/dss/dssmcmlfs01/pn34sa/pn34sa-dss-0000/aydemir/raw/metadata.csv"
 
 import pandas as pd
-
+import cv2
 
 # NUM_STEPS = 5
 NUM_STEPS = 5  # Max iterations, but model can terminate early with "done": true
 IMAGE_WH = (1024, 768)
 DEFAULT_FX_FY = 400.0   # wider FOV
-CAM_HEIGHT = 1.2        # meters above floor (heuristic)
+CAM_HEIGHT = 1.6        # meters above floor (heuristic)
 MAX_ATTEMPTS_PER_STEP = 3
 COND_THRESHOLD = 1e12   # threshold for condition number marking near-singular
 
+# Initial view selection configuration
+INITIAL_VIEW_SELECTION_METRIC = "visibility"  # "visibility" or "laplacian"
+# visibility: picks view with most mesh geometry visible (least occlusion)
+# laplacian: picks view with highest edge density/sharpness
+
 # Sky direction mapping (loaded from metadata CSV)
 _METADATA_CACHE = None
+
+def compute_visibility_score(image_array, background_color=(1.0, 1.0, 1.0)):
+    """
+    Compute visibility score: fraction of non-background pixels.
+    Higher score = more mesh geometry visible (less occlusion).
+    
+    Args:
+        image_array: numpy array (H, W, 3) with values in [0, 1]
+        background_color: tuple (R, G, B) for background
+    
+    Returns:
+        score: float in [0, 1], higher is better
+    """
+    if image_array.size == 0:
+        return 0.0
+    
+    # Convert to uint8 if needed for comparison
+    img_uint8 = (image_array * 255).astype(np.uint8) if image_array.max() <= 1.0 else image_array.astype(np.uint8)
+    bg_uint8 = tuple(int(c * 255) for c in background_color)
+    
+    # Count pixels that differ from background
+    non_bg = np.any(img_uint8 != bg_uint8, axis=2)
+    score = non_bg.sum() / (image_array.shape[0] * image_array.shape[1])
+    return score
+
+def compute_laplacian_variance_score(image_array):
+    """
+    Compute Laplacian variance: measures edge density and sharpness.
+    Higher score = more structured/sharp features visible.
+    
+    Args:
+        image_array: numpy array (H, W, 3) with values in [0, 1]
+    
+    Returns:
+        score: float, higher is better (not normalized)
+    """
+    if image_array.size == 0:
+        return 0.0
+    
+    # Convert to grayscale
+    img_uint8 = (image_array * 255).astype(np.uint8) if image_array.max() <= 1.0 else image_array.astype(np.uint8)
+    gray = cv2.cvtColor(img_uint8, cv2.COLOR_RGB2GRAY)
+    
+    # Compute Laplacian variance
+    laplacian = cv2.Laplacian(gray, cv2.CV_64F)
+    variance = laplacian.var()
+    return variance
+
+def select_best_initial_view(view_images, metric="visibility"):
+    """
+    Select the best view from 4 candidate views using the specified metric.
+    
+    Args:
+        view_images: dict with keys 0, 90, 180, 270 -> numpy arrays
+        metric: "visibility" or "laplacian"
+    
+    Returns:
+        tuple: (best_angle, best_score, all_scores_dict)
+    """
+    scores = {}
+    
+    if metric == "visibility":
+        for angle, img_array in view_images.items():
+            scores[angle] = compute_visibility_score(img_array)
+        print(f"[INFO] 🎯 Visibility scores: {scores}")
+    elif metric == "laplacian":
+        for angle, img_array in view_images.items():
+            scores[angle] = compute_laplacian_variance_score(img_array)
+        print(f"[INFO] 🎯 Laplacian variance scores: {scores}")
+    else:
+        raise ValueError(f"Unknown metric: {metric}")
+    
+    best_angle = max(scores, key=scores.get)
+    best_score = scores[best_angle]
+    print(f"[INFO] ✅ Selected view: {best_angle}° (score: {best_score:.4f})")
+    
+    return best_angle, best_score, scores
+
 def get_metadata_df():
     """Load metadata CSV with caching."""
     global _METADATA_CACHE
@@ -91,6 +174,7 @@ def timestamp_str():
 def look_at_camera_pose_center_from_forward(eye, forward=np.array([1.0,0.0,0.0]), up=np.array([0,0,-1])):
     """
     Construct camera-to-world 4x4 matrix at `eye` oriented along `forward` with up `up`.
+    Note: Default up=[0,0,-1] gives correct orientation for Open3D rendering.
     """
     forward = np.asarray(forward, dtype=float)
     forward_norm = np.linalg.norm(forward)
@@ -174,15 +258,17 @@ def render_mesh_from_pose(mesh: o3d.geometry.TriangleMesh, cam_pose_world: np.nd
     """
     width, height = IMAGE_WH
     renderer = rendering.OffscreenRenderer(width, height)
-    renderer.scene.clear_geometry()
+    renderer.scene.view.set_post_processing(False)
 
     # Create a material for the mesh with lit shader
     mat = rendering.MaterialRecord()
-    mat.shader = "defaultLit"
-    renderer.scene.add_geometry("mesh", mesh, mat)
+    mat.shader = "defaultUnlit"      # <-- CRITICAL: forces nearest sampling in legacy renderer
+    mat.base_color = [1, 1, 1, 1]
+    renderer.scene.clear_geometry()
+    renderer.scene.add_geometry("mesh", mesh, mat, True)
 
     # Setup lighting for better visualization
-    renderer.scene.set_lighting(rendering.Open3DScene.LightingProfile.SOFT_SHADOWS, (0.5, 0.5, 0.5))
+    #renderer.scene.set_lighting(rendering.Open3DScene.LightingProfile.SOFT_SHADOWS, (0.5, 0.5, 0.5))
 
     cx = width / 2.0
     cy = height / 2.0
@@ -558,7 +644,8 @@ def main_vsi_bench_loop(mesh_base_dir=MESH_BASE_DIR, num_steps_per_question=NUM_
         ground_truth_id = q_data["answer_id"]
         
         print("\n" + "─" * 80)
-        print(f"[Q{q_idx:03d}] Scene: {scene_id}")
+        print(f"[Q{q_idx:03d}] 📋 VSI-BENCH QUESTION DETAILS")
+        print(f"[Q{q_idx:03d}] Scene ID (from VSI-Bench): {scene_id}")
         print(f"[Q{q_idx:03d}] Question: {question_text}")
         print(f"[Q{q_idx:03d}] Options:")
         for i, choice in enumerate(choices):
@@ -570,7 +657,11 @@ def main_vsi_bench_loop(mesh_base_dir=MESH_BASE_DIR, num_steps_per_question=NUM_
         # Find mesh file
         mesh_file = find_mesh_file(scene_id, mesh_base_dir)
         if mesh_file is None:
-            print(f"[ERROR] Could not find mesh file for scene {scene_id}. Skipping.\n")
+            print(f"[Q{q_idx:03d}] ❌ ERROR: Could not find mesh file for scene {scene_id}. Skipping.\n")
+        else:
+            print(f"[Q{q_idx:03d}] 📂 Using PLY file: {mesh_file}")
+        
+        if mesh_file is None:
             results.append({
                 "scene_id": scene_id,
                 "question": question_text,
@@ -609,6 +700,13 @@ def main_vsi_bench_loop(mesh_base_dir=MESH_BASE_DIR, num_steps_per_question=NUM_
             "ground_truth": ground_truth_letter,
             "correct": is_correct
         })
+        
+        # Print running accuracy
+        correct_so_far = sum(1 for r in results if r["correct"])
+        total_so_far = len([r for r in results if r["status"] == "COMPLETED"])
+        running_accuracy = (100 * correct_so_far / total_so_far) if total_so_far > 0 else 0
+        print(f"[RUNNING] Accuracy so far: {correct_so_far}/{total_so_far} = {running_accuracy:.1f}%")
+        print("=" * 80)
     
     # Print summary
     print("\n" + "=" * 80)
@@ -662,19 +760,67 @@ def run_pipeline(mesh_path: Path, question="", choices=None, cache_dir=CACHE_DIR
     
     print(f"[INFO] 📐 Bounding box: x [{bbox_mins[0]:.2f}, {bbox_maxs[0]:.2f}], y [{bbox_mins[1]:.2f}, {bbox_maxs[1]:.2f}], z [{bbox_mins[2]:.2f}, {bbox_maxs[2]:.2f}]")
 
-    # Look up sky direction from metadata CSV
-    print(f"[INFO] 🌍 Looking up sky direction for scene {scene_id}...")
-    sky_dir = get_sky_direction_for_scene(scene_id)
-    up_vector = sky_direction_to_up_vector(sky_dir)
-    print(f"[INFO] 🌍 Sky direction: {sky_dir} -> up_vector: {np.round(up_vector, 2)}")
+    # DISABLED: Sky direction correction (see analysis - conceptually incorrect)
+    # The sky_direction metadata describes device orientation during capture,
+    # but the reconstructed mesh is already in world coordinates.
+    # For consistent navigation, we use standard upright orientation.
+    # print(f"[INFO] 🌍 Looking up sky direction for scene {scene_id}...")
+    # sky_dir = get_sky_direction_for_scene(scene_id)
+    # up_vector = sky_direction_to_up_vector(sky_dir)
+    # print(f"[INFO] 🌍 Sky direction: {sky_dir} -> up_vector: {np.round(up_vector, 2)}")
     
-    # initial camera pose (robust) with sky direction awareness
-    print(f"[INFO] 🎥 Computing initial camera pose...")
-    cam_pose = compute_initial_camera_pose(mesh, cam_height=CAM_HEIGHT, up_vector=up_vector)
+    # Force standard upright orientation for all scenes
+    # Note: Open3D uses Z-up with camera looking along +Z, so up=[0,0,-1] gives correct orientation
+    up_vector = np.array([0.0, 0.0, -1.0], dtype=float)
+    print(f"[INFO] 🌍 Using standard upright orientation: up_vector = {np.round(up_vector, 2)}")
+    
+    # Define the camera position (eye) before generating candidate views
+    vertices = np.asarray(mesh.vertices)
+    center_x = (vertices[:, 0].min() + vertices[:, 0].max()) / 2.0
+    center_y = (vertices[:, 1].min() + vertices[:, 1].max()) / 2.0
+    z_min, z_max = vertices[:, 2].min(), vertices[:, 2].max()
+    cam_height_z = z_min + CAM_HEIGHT
+    eye = np.array([center_x, center_y, cam_height_z], dtype=float)
+
+    # Generate 4 candidate views (0°, 90°, 180°, 270°) with correct up_vector
+    view_images = {}
+    view_poses = {}
+    view_angles = [0, 90, 180, 270]
+
+    for angle_deg in view_angles:
+        angle_rad = np.deg2rad(angle_deg)
+        forward = np.array([np.cos(angle_rad), np.sin(angle_rad), 0.0], dtype=float)
+        pose = look_at_camera_pose_center_from_forward(eye, forward=forward, up=up_vector)
+        view_poses[angle_deg] = pose
+
+        # Render and save temporary image
+        img_path = base_out / f"render_candidate_{angle_deg}.png"
+        render_mesh_from_pose(mesh, pose, img_path, fxfy=DEFAULT_FX_FY)
+
+        # Load image for scoring
+        img_pil = Image.open(img_path)
+        img_array = np.array(img_pil).astype(float) / 255.0
+        view_images[angle_deg] = img_array
+    
+    # Select best view using configured metric
+    best_angle, best_score, all_scores = select_best_initial_view(view_images, metric=INITIAL_VIEW_SELECTION_METRIC)
+    
+    # Save all candidate scores to file
+    scores_record = {
+        "metric": INITIAL_VIEW_SELECTION_METRIC,
+        "all_scores": {str(k): float(v) for k, v in all_scores.items()},
+        "best_angle": best_angle,
+        "best_score": float(best_score)
+    }
+    with open(base_out / "initial_view_selection.json", "w") as f:
+        json.dump(scores_record, f, indent=2)
+    
+    # Use the best pose as the initial camera pose
+    cam_pose = view_poses[best_angle]
     save_matrix(base_out / "cam_pose_00.npy", cam_pose)
     img0 = base_out / "render_00.png"
-    render_mesh_from_pose(mesh, cam_pose, img0, fxfy=DEFAULT_FX_FY)
-    print(f"[INFO] ✅ Initial render saved")
+    Image.fromarray((view_images[best_angle] * 255).astype(np.uint8)).save(str(img0))
+    print(f"[INFO] ✅ Initial render saved (best view: {best_angle}°)")
 
     image_history = [str(img0)]
     cam_history = [cam_pose.copy()]
