@@ -692,7 +692,8 @@ def main_vsi_bench_loop(mesh_base_dir=MESH_BASE_DIR, num_steps_per_question=NUM_
         print(f"[Q{q_idx:03d}] Options:")
         for i, choice in enumerate(choices):
             print(f"[Q{q_idx:03d}]   {chr(65+i)}) {choice}")
-        print(f"[Q{q_idx:03d}] Ground Truth: {ground_truth_id})")
+        if ground_truth_id >= 0 and ground_truth_id < len(choices):
+            print(f"[Q{q_idx:03d}] Ground Truth: {chr(65+ground_truth_id)}) {choices[ground_truth_id]}")
         print("─" * 80)
 
         # Find mesh file
@@ -704,7 +705,7 @@ def main_vsi_bench_loop(mesh_base_dir=MESH_BASE_DIR, num_steps_per_question=NUM_
                 "question": question_text,
                 "status": "SKIPPED - No mesh found",
                 "model_answer": None,
-                "ground_truth": ground_truth_id,
+                "ground_truth": chr(65+ground_truth_id) if ground_truth_id >= 0 else "Unknown",
                 "correct": False
             })
             continue
@@ -722,8 +723,8 @@ def main_vsi_bench_loop(mesh_base_dir=MESH_BASE_DIR, num_steps_per_question=NUM_
         )
 
         # Check correctness
-        ground_truth_letter = ground_truth_id
-        is_correct = (model_answer == ground_truth_letter) 
+        ground_truth_letter = chr(65+ground_truth_id) if ground_truth_id >= 0 else "Unknown"
+        is_correct = (model_answer == ground_truth_letter) if ground_truth_id >= 0 else False
 
         print(f"\n[Q{q_idx:03d}] Model Answer: {model_answer}")
         print(f"[Q{q_idx:03d}] Ground Truth: {ground_truth_letter}")
