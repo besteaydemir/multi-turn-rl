@@ -18,6 +18,7 @@ import torch
 import open3d as o3d
 from open3d.visualization import rendering
 from datasets import load_dataset
+import time
 
 from transformers import Qwen3VLForConditionalGeneration, AutoProcessor
 from qwen_vl_utils import process_vision_info  # assumed available in your environment
@@ -33,9 +34,9 @@ import pandas as pd
 import cv2
 
 # NUM_STEPS = 5
-NUM_STEPS = 5  # Max iterations, but model can terminate early with "done": true
+NUM_STEPS = 10  # Max iterations, but model can terminate early with "done": true
 IMAGE_WH = (1024, 768)
-DEFAULT_FX_FY = 400.0   # wider FOV
+DEFAULT_FX_FY = 300.0   # wider FOV
 CAM_HEIGHT = 1.6        # meters above floor (heuristic)
 MAX_ATTEMPTS_PER_STEP = 3
 COND_THRESHOLD = 1e12   # threshold for condition number marking near-singular
@@ -295,11 +296,20 @@ model.to(device)
 print("[INFO] Qwen3 model loaded.")
 
 # --------------- Qwen interaction and parsing --------------
-def build_instruction_text(R, t, question, bbox=None, options=None, is_final_step=False):
+def build_instruction_text(R, t, question, bbox=None, options=None, is_final_step=False, movement_history=None, step_num=0):
     R_rounded = np.round(R, 2).tolist()
     t_rounded = np.round(t, 2).tolist()
-    instr = build_instruction_natural(R_rounded, t_rounded, question, bbox=bbox, options=options, is_final_step=is_final_step)
-    return instr
+    instr = build_instruction_natural(R_rounded, t_rounded, question, bbox=bbox, options=options, is_final_step=is_final_step, step_num=step_num)
+
+    # Add movement history to the instruction with clear numbering
+    movement_history_text = ""
+    if movement_history:
+        movement_history_text = "\n---\nYour previous movements and actions (IMPORTANT: Do not repeat these movements exactly - vary your exploration strategy):\n"
+        for i, movement in enumerate(movement_history, 1):
+            movement_history_text += f"  Step {i}: Moved forward={movement['forward']:.2f}m, left={movement['left']:.2f}m, up={movement['z_delta']:.2f}m, rotated={movement['rotation']:.1f}°\n"
+        movement_history_text += "\nAvoid repeating these exact movements. Explore new areas of the scene.\n"
+
+    return instr + movement_history_text
 
 def find_mesh_file(scene_id, mesh_base_dir=MESH_BASE_DIR):
     """
@@ -320,7 +330,7 @@ def find_mesh_file(scene_id, mesh_base_dir=MESH_BASE_DIR):
     return None
 
 
-def build_instruction_natural(R_rounded, t_rounded, question, bbox=None, options=None, is_final_step=False):
+def build_instruction_natural(R_rounded, t_rounded, question, bbox=None, options=None, is_final_step=False, step_num=0):
     bbox_text = ""
     if bbox is not None:
         try:
@@ -329,7 +339,7 @@ def build_instruction_natural(R_rounded, t_rounded, question, bbox=None, options
             mins_2sf = [float(f"{x:.2g}") for x in mins]
             maxs_2sf = [float(f"{x:.2g}") for x in maxs]
             bbox_text = (
-                "Scene bounding box (meters):\n"
+                "Scene bounding box limits (meters):\n"
                 f"  x: [{mins_2sf[0]}, {maxs_2sf[0]}]\n"
                 f"  y: [{mins_2sf[1]}, {maxs_2sf[1]}]\n"
                 f"  z: [{mins_2sf[2]}, {maxs_2sf[2]}]\n\n"
@@ -356,68 +366,84 @@ def build_instruction_natural(R_rounded, t_rounded, question, bbox=None, options
    - Prioritize outputting your best answer.
    - You may provide minimal camera movement (e.g., small adjustments) or zero movement.
    - The critical requirement is that you output your final answer in the JSON response.
+   - Set "done": true ONLY when you are providing a final answer.
 """
-        important_note = "IMPORTANT: This is your final opportunity to answer. You MUST output your best answer choice (A/B/C/D) in the JSON."
+        important_note = "IMPORTANT: This is your final opportunity to answer. You MUST output your best answer choice (A/B/C/D) in the JSON and set done=true."
     else:
         movement_instruction = """
 4. **Do NOT stay in the same location.** Always provide at least one non-zero movement.
 
-5. **When you know the answer:** If you have seen enough viewpoints and are confident in your answer, set "done": true to terminate early.
+5. **Answering too early is a mistake.** ONLY output an answer (A, B, C, or D) when you have thoroughly explored the scene and are CERTAIN of your answer. 
+   - Most of the time, you should NOT provide an answer yet - just explore and set "done": false.
+   - Only when you are completely confident should you set both "answer": "X" AND "done": true together.
+   - Never output an answer while still exploring (done=false). Either explore (no answer) OR finalize (answer + done=true).
+
+6. **When you are confident:** If you have seen enough viewpoints and are absolutely certain of your answer, set "done": true AND provide your answer.
 """
-        important_note = "IMPORTANT: You MUST always output a camera movement command. This is not a one-time question. Your movements will be applied to re-render the scene from a new viewpoint and shown to you again."
+        important_note = "IMPORTANT: Keep exploring and DO NOT output an answer unless you are ready to stop (done=true). Answer and done=true should come together, not separately."
+
+    # Replace the first sentence of the question with a coherent starting point
+    question = question.replace("You are a robot beginning at", "If you begin navigating at")
+
+    # Add a note for Qwen to find the starting place first
+    starting_place_note = "\n**Note:** Your first task is to identify the starting place mentioned in the question.\n"
 
     instr = f"""
-You are given a rendered view of a 3D room scene. You control the camera by specifying how to move it.
+            You are given rendered views of a 3D room scene. You control the camera by specifying how to move it. 
+            Your goal is to find the answer to the question below by exploring the scene with camera movements.
 
-{bbox_text}
+            {bbox_text}
 
-Current camera position: {t_rounded} (x, y, z in meters)
-Current camera orientation: R_3x3 = {R_rounded}
+            # Current camera position: {t_rounded} (x, y, z in meters)
+            # This is exploration step {step_num}
 
-Question: {question}
-{options_text}
+            Question: {question}
+            {options_text}
 
-{important_note}
+            {starting_place_note}
+            {important_note}
 
----
-DETAILED REASONING INSTRUCTIONS:
+            ---
+            DETAILED REASONING INSTRUCTIONS:
 
-1. **Analyze the current view thoroughly:**
-   - What objects and areas are visible?
-   - What areas are hidden or blocked from the current viewpoint?
-   - What would you need to see to better answer the question?
+            1. **Analyze the current view thoroughly:**
+            - What objects and areas are visible?
+            - What areas are hidden or blocked from the current viewpoint?
+            - What would you need to see to better answer the question?
 
-2. **Plan your camera movement:**
-   - Decide how much to move forward/backward (toward/away from what you're looking at)
-   - Decide how much to move left/right (perpendicular to where you're looking)
-   - Think about what rotation (turning left/right) might help
-   - Write out your reasoning in plain English before giving the JSON.
+            2. **Plan your camera movement:**
+            - Decide how much to move forward/backward (toward/away from what you're looking at)
+            - Decide how much to move left/right (perpendicular to where you're looking)
+            - Think about what rotation (turning left/right) might help
+            - Write out your reasoning in plain English before giving the JSON.
 
-3. **Specify the movement:**
-   - `rotation_angle_degrees`: positive = turn left, negative = turn right (e.g., 15, -30, 90)
-   - `forward_meters`: positive = move forward (in the direction you're facing), negative = move backward. Range: -0.5 to +0.5 meters
-   - `left_meters`: positive = strafe left, negative = strafe right. Range: -0.5 to +0.5 meters
-   - `z_delta_meters`: move up (+) or down (-) to change height. Range: -0.3 to +0.3 meters
+            3. **Specify the movement:**
+            - `rotation_angle_degrees`: positive = turn left, negative = turn right (e.g., 15, -30, 90)
+            - `forward_meters`: positive = move forward (in the direction you're facing), negative = move backward. Range: -0.5 to +0.5 meters
+            - `left_meters`: positive = strafe left, negative = strafe right. Range: -0.5 to +0.5 meters
+            - `z_delta_meters`: move up (+) or down (-) to change height. Range: -0.3 to +0.3 meters
 
-{movement_instruction}
+            {movement_instruction}
 
----
-FORMAT:
+            ---
+            FORMAT:
 
-First, write your detailed reasoning (2-3 sentences explaining what you see and why you're moving the camera, or why you're ready to answer).
+            First, write your detailed reasoning (3-4 sentences explaining what you see and why you're moving the camera, or why you're ready to finalize your answer).
 
-Then end with a JSON object:
-{{
-  "rotation_angle_degrees": <number, e.g., 15 or -30>,
-  "forward_meters": <number between -0.5 and 0.5>,
-  "left_meters": <number between -0.5 and 0.5>,
-  "z_delta_meters": <number between -0.3 and 0.3>,
-  "answer": "your answer choice (e.g., A, B, C, or D)",
-  "done": false
-}}
+            Then end with a JSON object:
+            {{
+            "rotation_angle_degrees": <number, e.g., 15 or -30>,
+            "forward_meters": <number between -0.5 and 0.5>,
+            "left_meters": <number between -0.5 and 0.5>,
+            "z_delta_meters": <number between -0.3 and 0.3>,
+            "answer": "your final answer choice (A, B, C, or D) ONLY if done=true, otherwise null",
+            "done": true or false
+            }}
 
-Set "done": true when you are confident in your answer and wish to stop exploring.
-"""
+            CRITICAL: "answer" and "done" should be consistent:
+            - If done=false: answer MUST be null (you are still exploring)
+            - If done=true: answer MUST be A, B, C, or D (you have decided to finalize)
+            """
     return instr
 
 
@@ -611,41 +637,57 @@ def load_vsi_bench_questions():
         questions.append({
             "scene_name": row["scene_name"],
             "question": row["question"],
-            "choices": row.get("choices", []),
-            "answer_id": row.get("answer_id", -1),
+            "choices": row.get("options", []),
+            "answer_id": row.get("ground_truth", -1),
         })
     
     return questions
 
 # Main entry point for running all questions
-def main_vsi_bench_loop(mesh_base_dir=MESH_BASE_DIR, num_steps_per_question=NUM_STEPS):
+# Main entry point for running all questions
+def main_vsi_bench_loop(mesh_base_dir=MESH_BASE_DIR, num_steps_per_question=NUM_STEPS, continue_from=None):
     """
     Main loop: iterate through all VSI-Bench questions, find PLY files, and run reasoning.
+    If `continue_from` is provided, resumes from the specified folder and skips completed questions.
     """
     print("\n" + "=" * 80)
     print("🚀 VSI-BENCH ROUTE PLANNING EVALUATION")
     print("=" * 80 + "\n")
-    
+
     questions = load_vsi_bench_questions()
     print(f"[INFO] Loaded {len(questions)} questions\n")
-    
+
     results = []
-    
-    # Create a single timestamp for all questions in this batch
-    exp_timestamp = timestamp_str()
-    exp_base_dir = Path("experiment_logs") / exp_timestamp
-    exp_base_dir.mkdir(parents=True, exist_ok=True)
-    print(f"[INFO] 📁 Experiment logs: {exp_base_dir.resolve()}\n")
-    
+
+    # Determine experiment directory
+    if continue_from:
+        exp_base_dir = Path(continue_from)
+        print(f"[INFO] Resuming from existing folder: {exp_base_dir.resolve()}\n")
+    else:
+        exp_timestamp = timestamp_str()
+        exp_base_dir = Path("experiment_logs") / exp_timestamp
+        exp_base_dir.mkdir(parents=True, exist_ok=True)
+        print(f"[INFO] 📁 Experiment logs: {exp_base_dir.resolve()}\n")
+
+    # Track completed questions
+    completed_questions = set()
+    for subfolder in exp_base_dir.iterdir():
+        if subfolder.is_dir() and subfolder.name.startswith("q"):
+            completed_questions.add(subfolder.name)
+
     for q_idx, q_data in enumerate(questions, 1):
         scene_id = q_data["scene_name"]
         question_text = q_data["question"]
         choices = q_data["choices"]
         ground_truth_id = q_data["answer_id"]
-        
+
+        question_folder = f"q{q_idx:03d}"
+        if question_folder in completed_questions:
+            print(f"[INFO] Skipping already completed question: {question_folder}")
+            continue
+
         print("\n" + "─" * 80)
-        print(f"[Q{q_idx:03d}] 📋 VSI-BENCH QUESTION DETAILS")
-        print(f"[Q{q_idx:03d}] Scene ID (from VSI-Bench): {scene_id}")
+        print(f"[Q{q_idx:03d}] Scene: {scene_id}")
         print(f"[Q{q_idx:03d}] Question: {question_text}")
         print(f"[Q{q_idx:03d}] Options:")
         for i, choice in enumerate(choices):
@@ -653,15 +695,11 @@ def main_vsi_bench_loop(mesh_base_dir=MESH_BASE_DIR, num_steps_per_question=NUM_
         if ground_truth_id >= 0 and ground_truth_id < len(choices):
             print(f"[Q{q_idx:03d}] Ground Truth: {chr(65+ground_truth_id)}) {choices[ground_truth_id]}")
         print("─" * 80)
-        
+
         # Find mesh file
         mesh_file = find_mesh_file(scene_id, mesh_base_dir)
         if mesh_file is None:
-            print(f"[Q{q_idx:03d}] ❌ ERROR: Could not find mesh file for scene {scene_id}. Skipping.\n")
-        else:
-            print(f"[Q{q_idx:03d}] 📂 Using PLY file: {mesh_file}")
-        
-        if mesh_file is None:
+            print(f"[ERROR] Could not find mesh file for scene {scene_id}. Skipping.\n")
             results.append({
                 "scene_id": scene_id,
                 "question": question_text,
@@ -671,7 +709,7 @@ def main_vsi_bench_loop(mesh_base_dir=MESH_BASE_DIR, num_steps_per_question=NUM_
                 "correct": False
             })
             continue
-        
+
         # Run reasoning pipeline with shared experiment base directory
         print(f"[INFO] Starting reasoning pipeline for question {q_idx}...")
         model_answer = run_pipeline(
@@ -680,18 +718,18 @@ def main_vsi_bench_loop(mesh_base_dir=MESH_BASE_DIR, num_steps_per_question=NUM_
             choices=choices,
             num_steps=num_steps_per_question,
             question_id=q_idx,
-            experiment_base_dir=str(exp_base_dir.parent),
+            experiment_base_dir=str(exp_base_dir),
             scene_id=scene_id
         )
-        
+
         # Check correctness
         ground_truth_letter = chr(65+ground_truth_id) if ground_truth_id >= 0 else "Unknown"
         is_correct = (model_answer == ground_truth_letter) if ground_truth_id >= 0 else False
-        
+
         print(f"\n[Q{q_idx:03d}] Model Answer: {model_answer}")
         print(f"[Q{q_idx:03d}] Ground Truth: {ground_truth_letter}")
         print(f"[Q{q_idx:03d}] Result: {'✅ CORRECT' if is_correct else '❌ INCORRECT'}\n")
-        
+
         results.append({
             "scene_id": scene_id,
             "question": question_text,
@@ -700,14 +738,15 @@ def main_vsi_bench_loop(mesh_base_dir=MESH_BASE_DIR, num_steps_per_question=NUM_
             "ground_truth": ground_truth_letter,
             "correct": is_correct
         })
-        
+
         # Print running accuracy
         correct_so_far = sum(1 for r in results if r["correct"])
         total_so_far = len([r for r in results if r["status"] == "COMPLETED"])
         running_accuracy = (100 * correct_so_far / total_so_far) if total_so_far > 0 else 0
         print(f"[RUNNING] Accuracy so far: {correct_so_far}/{total_so_far} = {running_accuracy:.1f}%")
+        print(f"[RUNNING] Progress: {total_so_far}/{len(questions)} questions completed.")
         print("=" * 80)
-    
+
     # Print summary
     print("\n" + "=" * 80)
     print("📊 SUMMARY")
@@ -715,11 +754,11 @@ def main_vsi_bench_loop(mesh_base_dir=MESH_BASE_DIR, num_steps_per_question=NUM_
     correct_count = sum(1 for r in results if r["correct"])
     total_count = len([r for r in results if r["status"] == "COMPLETED"])
     print(f"Accuracy: {correct_count}/{total_count} = {100*correct_count/total_count:.1f}%\n")
-    
+
     for r in results:
         status_icon = "✅" if r["correct"] else ("⏭️ " if "SKIPPED" in r["status"] else "❌")
         print(f"{status_icon} {r['scene_id']:6s} | {r['model_answer']:1s} vs {r['ground_truth']:1s} | {r['question'][:60]}")
-    
+
     # Save results to JSON in the experiment directory
     results_file = exp_base_dir / "results.json"
     with open(results_file, "w") as f:
@@ -731,18 +770,18 @@ def run_pipeline(mesh_path: Path, question="", choices=None, cache_dir=CACHE_DIR
     Run the reasoning pipeline for a single question.
     Returns the model's final answer (A, B, C, D, etc.)
     """
+    start_time = time.time()  # Start timing
+
     if choices is None:
         choices = []
-    
+
     # Extract scene_id from mesh_path if not provided
     if scene_id is None:
         # mesh_path format: .../Validation|Training/{video_id}/{video_id}_3dod_mesh.ply
         scene_id = mesh_path.parent.name
-    
-    run_ts = timestamp_str()
+
     # Create nested directory: experiment_logs/YYYYMMDD_HHMMSS/q00X
-    exp_base = Path(experiment_base_dir) / run_ts
-    base_out = exp_base / f"q{question_id:03d}"
+    base_out = Path(experiment_base_dir) / f"q{question_id:03d}"
     base_out.mkdir(parents=True, exist_ok=True)
     print(f"\n[INFO] 📁 Outputs -> {base_out.resolve()}")
 
@@ -757,23 +796,9 @@ def run_pipeline(mesh_path: Path, question="", choices=None, cache_dir=CACHE_DIR
     vertices = np.asarray(mesh.vertices)
     bbox_mins = vertices.min(axis=0).tolist()
     bbox_maxs = vertices.max(axis=0).tolist()
-    
+
     print(f"[INFO] 📐 Bounding box: x [{bbox_mins[0]:.2f}, {bbox_maxs[0]:.2f}], y [{bbox_mins[1]:.2f}, {bbox_maxs[1]:.2f}], z [{bbox_mins[2]:.2f}, {bbox_maxs[2]:.2f}]")
 
-    # DISABLED: Sky direction correction (see analysis - conceptually incorrect)
-    # The sky_direction metadata describes device orientation during capture,
-    # but the reconstructed mesh is already in world coordinates.
-    # For consistent navigation, we use standard upright orientation.
-    # print(f"[INFO] 🌍 Looking up sky direction for scene {scene_id}...")
-    # sky_dir = get_sky_direction_for_scene(scene_id)
-    # up_vector = sky_direction_to_up_vector(sky_dir)
-    # print(f"[INFO] 🌍 Sky direction: {sky_dir} -> up_vector: {np.round(up_vector, 2)}")
-    
-    # Force standard upright orientation for all scenes
-    # Note: Open3D uses Z-up with camera looking along +Z, so up=[0,0,-1] gives correct orientation
-    up_vector = np.array([0.0, 0.0, -1.0], dtype=float)
-    print(f"[INFO] 🌍 Using standard upright orientation: up_vector = {np.round(up_vector, 2)}")
-    
     # Define the camera position (eye) before generating candidate views
     vertices = np.asarray(mesh.vertices)
     center_x = (vertices[:, 0].min() + vertices[:, 0].max()) / 2.0
@@ -790,7 +815,7 @@ def run_pipeline(mesh_path: Path, question="", choices=None, cache_dir=CACHE_DIR
     for angle_deg in view_angles:
         angle_rad = np.deg2rad(angle_deg)
         forward = np.array([np.cos(angle_rad), np.sin(angle_rad), 0.0], dtype=float)
-        pose = look_at_camera_pose_center_from_forward(eye, forward=forward, up=up_vector)
+        pose = look_at_camera_pose_center_from_forward(eye, forward=forward, up=np.array([0.0, 0.0, -1.0]))
         view_poses[angle_deg] = pose
 
         # Render and save temporary image
@@ -801,10 +826,10 @@ def run_pipeline(mesh_path: Path, question="", choices=None, cache_dir=CACHE_DIR
         img_pil = Image.open(img_path)
         img_array = np.array(img_pil).astype(float) / 255.0
         view_images[angle_deg] = img_array
-    
+
     # Select best view using configured metric
     best_angle, best_score, all_scores = select_best_initial_view(view_images, metric=INITIAL_VIEW_SELECTION_METRIC)
-    
+
     # Save all candidate scores to file
     scores_record = {
         "metric": INITIAL_VIEW_SELECTION_METRIC,
@@ -814,7 +839,7 @@ def run_pipeline(mesh_path: Path, question="", choices=None, cache_dir=CACHE_DIR
     }
     with open(base_out / "initial_view_selection.json", "w") as f:
         json.dump(scores_record, f, indent=2)
-    
+
     # Use the best pose as the initial camera pose
     cam_pose = view_poses[best_angle]
     save_matrix(base_out / "cam_pose_00.npy", cam_pose)
@@ -830,8 +855,8 @@ def run_pipeline(mesh_path: Path, question="", choices=None, cache_dir=CACHE_DIR
     t_current = cam_pose[:3,3]
 
     # Track position history for context
-    position_history = [(0, t_current.copy())]  # (step, t_vector)
-    
+    position_history = []  # Store as list of dictionaries
+
     # Track the final answer
     final_answer = None
 
@@ -841,14 +866,17 @@ def run_pipeline(mesh_path: Path, question="", choices=None, cache_dir=CACHE_DIR
         print(f"\n[Step {step:02d}] " + "─" * 40)
         # Check if this is the final step
         is_final_step = (step == num_steps)
-        # build single instruction + messages: send ALL images so far with their positions
-        instruction_text = build_instruction_text(R_current, t_current, question, bbox=(bbox_mins, bbox_maxs), options=choices, is_final_step=is_final_step)
 
-        # Build history context showing where each image was taken
-        history_context = "## Image History (where each view was taken):\n"
-        for hist_step, hist_t in position_history:
-            history_context += f"  Image {hist_step}: position [tx={hist_t[0]:.2f}, ty={hist_t[1]:.2f}, tz={hist_t[2]:.2f}]\n"
-        history_context += "\n"
+        # build single instruction + messages: send ALL images so far with their positions
+        instruction_text = build_instruction_text(
+            R_current, t_current, question, bbox=(bbox_mins, bbox_maxs), options=choices, is_final_step=is_final_step, movement_history=position_history, step_num=step
+        )
+
+        # Build history context showing where each image was taken with clear numbering
+        history_context = "## Image History (numbered for reference):\n"
+        for hist_step, hist_t in enumerate(cam_history):
+            history_context += f"  Image {hist_step}: position [x={hist_t[0,3]:.2f}m, y={hist_t[1,3]:.2f}m, z={hist_t[2,3]:.2f}m]\n"
+        history_context += "\nAbove are all the images you have seen so far in this exploration.\n\n"
 
         # Build messages with ALL images accumulated so far
         messages = [
@@ -859,12 +887,12 @@ def run_pipeline(mesh_path: Path, question="", choices=None, cache_dir=CACHE_DIR
                 ]
             }
         ]
-        
+
         # Add all images to the message content
         for img_path in image_history:
             messages[0]["content"].insert(len(messages[0]["content"]) - 1, {"type": "image", "image": img_path})
 
-        # save the messages passed
+        # Save the messages passed
         step_folder = base_out / f"step_{step:02d}"
         step_folder.mkdir(parents=True, exist_ok=True)
         with open(step_folder / "qwen_input_messages.json", "w", encoding="utf-8") as f:
@@ -873,7 +901,7 @@ def run_pipeline(mesh_path: Path, question="", choices=None, cache_dir=CACHE_DIR
         with open(step_folder / "qwen_input_instruction.txt", "w", encoding="utf-8") as f:
             f.write(history_context + instruction_text)
 
-        # prepare inputs for Qwen
+        # Prepare inputs for Qwen
         inputs = processor.apply_chat_template(
             messages,
             tokenize=True,
@@ -881,7 +909,7 @@ def run_pipeline(mesh_path: Path, question="", choices=None, cache_dir=CACHE_DIR
             return_dict=True,
             return_tensors="pt"
         )
-        inputs = {k:v.to(device) for k,v in inputs.items()}
+        inputs = {k: v.to(device) for k, v in inputs.items()}
 
         attempt = 0
         parsed_ok = False
@@ -898,44 +926,43 @@ def run_pipeline(mesh_path: Path, question="", choices=None, cache_dir=CACHE_DIR
                 generated_ids_trimmed = [out_ids[len(in_ids):] for in_ids, out_ids in zip(inputs['input_ids'], generated_ids)]
                 output_texts = processor.batch_decode(generated_ids_trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=True)
                 # Join if batch-like
-                output_text = output_texts[0] if isinstance(output_texts, (list,tuple)) else str(output_texts)
+                output_text = output_texts[0] if isinstance(output_texts, (list, tuple)) else str(output_texts)
             except Exception as e:
                 output_text = f"Generation error: {e}"
 
-            # save raw output
+            # Save raw output
             with open(attempt_folder / "qwen_raw_output.txt", "w", encoding="utf-8") as f:
                 f.write(output_text)
-            
-            # print to terminal for inspection
+
+            # Print to terminal for inspection
             print(f"\n[QWEN OUTPUT Step {step}, Attempt {attempt}]:")
             print("=" * 80)
             print(output_text)
             print("=" * 80 + "\n")
 
-            # try to parse JSON and extract movement commands
+            # Try to parse JSON and extract movement commands
             rotation_angle, forward_m, left_m, z_delta_m, reasoning_text, raw_obj, done_flag = parse_qwen_output_and_get_movement(output_text)
-            
-            # Capture the answer if present
-            if raw_obj and isinstance(raw_obj, dict) and "answer" in raw_obj:
-                model_answer = str(raw_obj["answer"]).strip().upper()
-                if model_answer and len(model_answer) == 1 and model_answer in "ABCDEFGHIJ":
-                    final_answer = model_answer
-                    print(f"[DEBUG] Captured answer: {final_answer}")
-            
-            parsed_record = {
-                "rotation_angle_degrees": rotation_angle,
-                "forward_meters": forward_m,
-                "left_meters": left_m,
-                "z_delta_meters": z_delta_m,
-                "reasoning": reasoning_text,
-                "answer_field": raw_obj.get("answer") if isinstance(raw_obj, dict) else None,
-                "done": done_flag,
-                "raw_obj": raw_obj
-            }
-            with open(attempt_folder / "qwen_parsed_attempt.json", "w", encoding="utf-8") as f:
-                json.dump(parsed_record, f, indent=2, default=lambda x: x if x is None else x)
 
-            last_output_text = output_text
+            # Validate consistency: answer should only be present if done=true
+            if raw_obj and isinstance(raw_obj, dict):
+                answer_value = raw_obj.get("answer")
+                has_answer = answer_value is not None and str(answer_value).strip().upper() in "ABCDEFGHIJ"
+                
+                # Enforce consistency: done=true with answer, or done=false without answer
+                if has_answer and not done_flag:
+                    print(f"[WARN] Model provided answer '{answer_value}' but done=false. Rejecting answer - must finalize with done=true to provide answer.")
+                    has_answer = False
+                elif not has_answer and done_flag:
+                    print(f"[WARN] Model set done=true but provided no valid answer. Ignoring done flag - must provide answer with done=true.")
+                    done_flag = False
+                
+                # Only capture answer if done=true
+                if has_answer and done_flag:
+                    model_answer = str(answer_value).strip().upper()
+                    final_answer = model_answer
+                    print(f"[DEBUG] Captured final answer: {final_answer}")
+            else:
+                has_answer = False
 
             # Debug logging
             print(f"[DEBUG Step {step}, Attempt {attempt}] Extracted: rotation={rotation_angle}, forward={forward_m}, left={left_m}, z_delta={z_delta_m}, done={done_flag}")
@@ -948,15 +975,15 @@ def run_pipeline(mesh_path: Path, question="", choices=None, cache_dir=CACHE_DIR
                 R_new = parse_rotation_angle(rotation_angle, R_current)
                 # Apply movement in camera frame to get new t
                 t_new = apply_movement_in_camera_frame(R_current, t_current, forward_m, left_m, z_delta_m)
-                
+
                 print(f"[DEBUG] Movement applied: forward={forward_m}m, left={left_m}m, z_delta={z_delta_m}m")
                 print(f"[DEBUG] Applied rotation of {rotation_angle} degrees to R")
-                
-                # build homogeneous matrix
+
+                # Build homogeneous matrix
                 M = np.eye(4, dtype=float)
-                M[:3,:3] = R_new
-                M[:3,3] = t_new
-                # check condition number
+                M[:3, :3] = R_new
+                M[:3, 3] = t_new
+                # Check condition number
                 try:
                     cond = np.linalg.cond(M)
                 except Exception:
@@ -967,14 +994,14 @@ def run_pipeline(mesh_path: Path, question="", choices=None, cache_dir=CACHE_DIR
                     with open(attempt_folder / "qwen_valid_marker.txt", "w") as f:
                         f.write(f"VALID pose with rotation_angle={rotation_angle}°, cond={cond:.4e}\n")
                 else:
-                    # record invalid due to conditioning
+                    # Record invalid due to conditioning
                     with open(attempt_folder / "qwen_invalid_marker.txt", "w") as f:
                         f.write(f"INVALID due to condition number {cond:.4e}\n")
             else:
                 with open(attempt_folder / "qwen_invalid_marker.txt", "w") as f:
                     f.write("No movement parameters parsed from Qwen output.\n")
 
-            # increment attempt counter
+            # Increment attempt counter
             attempt += 1
 
         # After attempts, decide next camera pose
@@ -984,7 +1011,7 @@ def run_pipeline(mesh_path: Path, question="", choices=None, cache_dir=CACHE_DIR
             with open(step_folder / "qwen_chosen_matrix.npy", "wb") as f:
                 np.save(f, next_pose)
         else:
-            # fallback: small perturbation from last valid pose
+            # Fallback: small perturbation from last valid pose
             print(f"[WARN] Step {step}: Qwen did not provide a valid pose after {MAX_ATTEMPTS_PER_STEP} attempts. Using fallback perturbation.")
             last = last_valid_pose
             angle = 10.0 * np.pi / 180.0  # 10 degrees
@@ -992,12 +1019,12 @@ def run_pipeline(mesh_path: Path, question="", choices=None, cache_dir=CACHE_DIR
             sin_a = np.sin(angle)
             Rz = np.array([[cos_a, -sin_a, 0.0], [sin_a, cos_a, 0.0], [0.0, 0.0, 1.0]])
             next_pose = last.copy()
-            next_pose[:3,:3] = Rz @ next_pose[:3,:3]
-            # small forward translate
-            forward = next_pose[:3,2]  # camera forward
-            next_pose[:3,3] = next_pose[:3,3] + 0.2 * forward  # 0.2 meters forward
+            next_pose[:3, :3] = Rz @ next_pose[:3, :3]
+            # Small forward translate
+            forward = next_pose[:3, 2]  # Camera forward
+            next_pose[:3, 3] = next_pose[:3, 3] + 0.2 * forward  # 0.2 meters forward
 
-            # save fallback
+            # Save fallback
             with open(step_folder / "fallback_used.txt", "w") as f:
                 f.write("Fallback perturbation used because Qwen suggestions invalid or none.\n")
             save_matrix(step_folder / f"fallback_pose.npy", next_pose)
@@ -1010,10 +1037,10 @@ def run_pipeline(mesh_path: Path, question="", choices=None, cache_dir=CACHE_DIR
         # Append to histories
         image_history.append(str(img_next))
         cam_history.append(next_pose)
-        R_current = next_pose[:3,:3]
-        t_current = next_pose[:3,3]
+        R_current = next_pose[:3, :3]
+        t_current = next_pose[:3, 3]
 
-        # also save the raw output last seen for easy top-level inspection
+        # Also save the raw output last seen for easy top-level inspection
         with open(step_folder / "qwen_last_raw_text.txt", "w", encoding="utf-8") as f:
             f.write(last_output_text if last_output_text is not None else "")
 
@@ -1024,12 +1051,22 @@ def run_pipeline(mesh_path: Path, question="", choices=None, cache_dir=CACHE_DIR
             print(f"[INFO] Model signaled completion at step {step}. Terminating pipeline.")
             break
 
-        # Update position history for next iteration
-        position_history.append((step + 1, t_current.copy()))
+        # Update position history for next iteration (only if movement was valid)
+        if rotation_angle is not None and forward_m is not None and left_m is not None and z_delta_m is not None:
+            position_history.append({
+                "rotation": rotation_angle,
+                "forward": forward_m,
+                "left": left_m,
+                "z_delta": z_delta_m
+            })
 
     print(f"\n[DONE] Pipeline finished. See folder: {base_out.resolve()}")
     print(f"[DONE] Final answer captured: {final_answer}")
-    
+
+    end_time = time.time()  # End timing
+    elapsed_time = end_time - start_time
+    print(f"[INFO] Time taken to answer question {question_id}: {elapsed_time:.2f} seconds")
+
     return final_answer
 
 # Main entry for batch evaluation
@@ -1039,11 +1076,22 @@ if __name__ == "__main__":
     parser.add_argument("--question", default="", help="Question text (for single run)")
     parser.add_argument("--batch", action="store_true", help="Run full VSI-Bench batch evaluation")
     parser.add_argument("--steps", type=int, default=NUM_STEPS, help="Number of reasoning steps per question")
+    parser.add_argument("--continue", dest="continue_from", default=None, help="Resume from the most recent experiment folder and skip completed questions")
     args = parser.parse_args()
-    
+
     if args.batch:
         print("[INFO] Running VSI-Bench batch evaluation...")
-        main_vsi_bench_loop(num_steps_per_question=args.steps)
+        if args.continue_from == "recent":
+            # Find the most recent experiment folder
+            exp_logs = Path("experiment_logs")
+            if exp_logs.exists():
+                recent_folder = max(exp_logs.iterdir(), key=lambda p: p.stat().st_mtime, default=None)
+                if recent_folder:
+                    print(f"[INFO] Found recent folder: {recent_folder.resolve()}")
+                    args.continue_from = str(recent_folder)
+                else:
+                    args.continue_from = None
+        main_vsi_bench_loop(num_steps_per_question=args.steps, continue_from=args.continue_from)
     elif args.ply:
         print(f"[INFO] Running single mesh: {args.ply}")
         answer = run_pipeline(Path(args.ply), question=args.question, num_steps=args.steps)
