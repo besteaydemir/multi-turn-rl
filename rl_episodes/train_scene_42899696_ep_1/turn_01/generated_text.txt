@@ -1,0 +1,10 @@
+The current view is from a high vantage point looking down into what appears to be a narrow space, possibly a staircase or a loft area. The view is obstructed by a white curtain or fabric on the right side, and there is a light fixture visible on the left wall. The floor below appears to be a landing or another level. The question states we are starting at the TV facing the bed, but the current view doesn't show a TV or a bed. We need to explore to find the TV and the bed to establish our starting orientation. Then we need to navigate to the trash bin, which is described as being on our right after moving forward to a cabinet. Since we don't have a clear view of the TV or the bed, we should first try to orient ourselves and look for these objects. Looking down and to the left might help us see more of the room and locate the TV and bed.
+
+{
+    "rotation_angle_degrees": -30,
+    "forward_meters": 0.2,
+    "left_meters": 0.1,
+    "z_delta_meters": 0.0,
+    "answer": null,
+    "done": false
+}

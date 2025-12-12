@@ -1,0 +1,85 @@
+
+            You are given rendered views of a 3D room scene. You control the camera by specifying how to move it. 
+            Your goal is to find the answer to the question below by exploring the scene with camera movements.
+
+            Scene bounding box limits (meters):
+  x: [-5.2, 5.7]
+  y: [-2.2, 5.8]
+  z: [-2.1, 2.6]
+
+
+
+            # Current camera position: [0.41, 1.73, -0.59] (x, y, z in meters)
+            # This is exploration step 2
+
+            Question: If you begin navigating at the tv facing the bed. You want to navigate to the trash bin. You will perform the following actions (Note: for each [please fill in], choose either 'turn back,' 'turn left,' or 'turn right.'): 1. [please fill in] 2. Go forward until the cabinet 3. [please fill in] 4. Go forward until the trash bin is on your right. You have reached the final destination.
+            
+**Answer Options:**
+  A) A. Turn Left, Turn Left
+  B) B. Turn Right, Turn Left
+  C) C. Turn Back, Turn Left
+  D) D. Turn Right, Turn Right
+
+
+
+            
+**Note:** Your first task is to identify the starting place mentioned in the question.
+
+            IMPORTANT: Keep exploring and DO NOT output an answer unless you are ready to stop (done=true). Answer and done=true should come together, not separately.
+
+            ---
+            DETAILED REASONING INSTRUCTIONS:
+
+            1. **Analyze the current view thoroughly:**
+            - What objects and areas are visible?
+            - What areas are hidden or blocked from the current viewpoint?
+            - What would you need to see to better answer the question?
+
+            2. **Plan your camera movement:**
+            - Decide how much to move forward/backward (toward/away from what you're looking at)
+            - Decide how much to move left/right (perpendicular to where you're looking)
+            - Think about what rotation (turning left/right) might help
+            - Write out your reasoning in plain English before giving the JSON.
+
+            3. **Specify the movement:**
+            - `rotation_angle_degrees`: positive = turn left, negative = turn right (e.g., 15, -30, 90)
+            - `forward_meters`: positive = move forward (in the direction you're facing), negative = move backward. Range: -0.5 to +0.5 meters
+            - `left_meters`: positive = strafe left, negative = strafe right. Range: -0.5 to +0.5 meters
+            - `z_delta_meters`: move up (+) or down (-) to change height. Range: -0.3 to +0.3 meters
+
+            
+4. **Do NOT stay in the same location.** Always provide at least one non-zero movement.
+
+5. **Answering too early is a mistake.** ONLY output an answer (A, B, C, or D) when you have thoroughly explored the scene and are CERTAIN of your answer. 
+   - Most of the time, you should NOT provide an answer yet - just explore and set "done": false.
+   - Only when you are completely confident should you set both "answer": "X" AND "done": true together.
+   - Never output an answer while still exploring (done=false). Either explore (no answer) OR finalize (answer + done=true).
+
+6. **When you are confident:** If you have seen enough viewpoints and are absolutely certain of your answer, set "done": true AND provide your answer.
+
+
+            ---
+            FORMAT:
+
+            First, write your detailed reasoning (3-4 sentences explaining what you see and why you're moving the camera, or why you're ready to finalize your answer).
+
+            Then end with a JSON object:
+            {
+            "rotation_angle_degrees": <number, e.g., 15 or -30>,
+            "forward_meters": <number between -0.5 and 0.5>,
+            "left_meters": <number between -0.5 and 0.5>,
+            "z_delta_meters": <number between -0.3 and 0.3>,
+            "answer": "your final answer choice (A, B, C, or D) ONLY if done=true, otherwise null",
+            "done": true or false
+            }
+
+            CRITICAL: "answer" and "done" should be consistent:
+            - If done=false: answer MUST be null (you are still exploring)
+            - If done=true: answer MUST be A, B, C, or D (you have decided to finalize)
+            
+---
+Your previous movements and actions (IMPORTANT: Do not repeat these movements exactly - vary your exploration strategy):
+  Step 1: Moved forward=0.20m, left=0.10m, up=0.00m, rotated=-30.0°
+  Step 2: Moved forward=0.00m, left=0.00m, up=0.00m, rotated=30.0°
+
+Avoid repeating these exact movements. Explore new areas of the scene.

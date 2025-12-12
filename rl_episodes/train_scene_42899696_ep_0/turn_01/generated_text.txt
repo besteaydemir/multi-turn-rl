@@ -1,0 +1,10 @@
+Based on the current view, I am looking down a staircase. The question asks me to navigate from a TV facing a bed to a trash bin. Since I am currently on a staircase, I need to determine the direction relative to the TV and bed. The view shows a wall on the left and a staircase descending, which suggests I am likely in a hallway or entryway. To find the TV and bed, I need to look around. I will turn left to see what is on that side of the hallway.
+
+{
+    "rotation_angle_degrees": 30,
+    "forward_meters": 0.0,
+    "left_meters": 0.0,
+    "z_delta_meters": 0.0,
+    "answer": null,
+    "done": false
+}
