@@ -54,18 +54,27 @@ def example_batch_collection():
     model.to(device)
     print("[✓] Model loaded")
     
-    # Create simulator with sampling enabled
-    print(f"\n[2] Creating simulator with sampling...")
-    simulator = EpisodeSimulator(
-        model=model,
-        processor=processor,
-        device=device,
+    # Create simulator config
+    print(f"\n[2] Creating simulator config...")
+    simulator_config = SimulatorConfig(
         max_steps=3,  # Short episodes for testing
         track_action_tokens=True,
         do_sample=True,          # Enable sampling
         temperature=0.8,         # Temperature for randomness
         top_p=0.9,              # Nucleus sampling
-        top_k=50                # Top-k sampling
+        top_k=50,               # Top-k sampling
+        min_action_tokens=10,
+        max_action_tokens=100
+    )
+    print("[✓] Simulator config created")
+    
+    # Create simulator with sampling enabled
+    print(f"\n[3] Creating simulator with sampling...")
+    simulator = EpisodeSimulator(
+        model=model,
+        processor=processor,
+        config=simulator_config,
+        device=device
     )
     print("[✓] Simulator created with sampling parameters")
     print(f"    - do_sample: True")
@@ -74,7 +83,7 @@ def example_batch_collection():
     print(f"    - top_k: 50")
     
     # Create batch collector
-    print(f"\n[3] Creating batch collector...")
+    print(f"\n[4] Creating batch collector...")
     output_dir = Path("batch_collection_output")
     collector = EpisodeBatchCollector(
         simulator=simulator,

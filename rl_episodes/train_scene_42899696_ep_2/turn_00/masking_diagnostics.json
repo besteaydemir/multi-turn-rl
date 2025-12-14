@@ -1,8 +1,0 @@
-{
-  "method": "brace_depth",
-  "confidence": 1.0,
-  "num_action_tokens": 53,
-  "num_reasoning_tokens": 181,
-  "validation_passed": true,
-  "issues": []
-}

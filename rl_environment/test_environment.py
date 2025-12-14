@@ -126,19 +126,31 @@ def test_single_episode():
     )
     print("[✓] Environment created")
     
+    # Create simulator config
+    print(f"\n[5] Creating simulator config...")
+    simulator_config = SimulatorConfig(
+        max_steps=3,
+        track_action_tokens=True,
+        do_sample=True,
+        temperature=1.0,
+        top_p=0.9,
+        top_k=50,
+        min_action_tokens=10,
+        max_action_tokens=100
+    )
+    
     # Create simulator
-    print(f"\n[5] Creating episode simulator...")
+    print(f"\n[6] Creating episode simulator...")
     simulator = EpisodeSimulator(
         model=model,
         processor=processor,
-        device=device,
-        max_steps=3,
-        track_action_tokens=True
+        config=simulator_config,
+        device=device
     )
     print("[✓] Simulator created")
     
     # Run episode
-    print(f"\n[6] Running episode...")
+    print(f"\n[7] Running episode...")
     episode = simulator.run_episode(
         env=env,
         initial_pose=initial_pose,

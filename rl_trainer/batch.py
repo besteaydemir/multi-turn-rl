@@ -220,30 +220,37 @@ def prepare_batch(
         context_len = len(context_ids)
         gen_len = len(gen_ids)
         
+        # Get device from existing tensors
+        device = context_ids.device
+        
+        # Ensure all tensors are on the same device
+        gen_ids = gen_ids.to(device)
+        action_mask = action_mask.to(device)
+        
         # Pad context to max_context_len
         context_padding = max_context_len - context_len
         padded_context = torch.cat([
             context_ids,
-            torch.full((context_padding,), pad_token_id, dtype=torch.long)
+            torch.full((context_padding,), pad_token_id, dtype=torch.long, device=device)
         ])
         
         # Pad generated to max_gen_len
         gen_padding = max_gen_len - gen_len
         padded_gen = torch.cat([
             gen_ids,
-            torch.full((gen_padding,), pad_token_id, dtype=torch.long)
+            torch.full((gen_padding,), pad_token_id, dtype=torch.long, device=device)
         ])
         
         # Pad action mask to max_gen_len
         mask_padding = max_gen_len - len(action_mask)
         padded_mask = torch.cat([
             action_mask,
-            torch.zeros(mask_padding, dtype=torch.bool)
+            torch.zeros(mask_padding, dtype=torch.bool, device=device)
         ])
         
         # Attention mask (1 for real tokens, 0 for padding)
         # Shape: [max_len] = [max_context_len + max_gen_len]
-        attention_mask = torch.zeros(max_len, dtype=torch.long)
+        attention_mask = torch.zeros(max_len, dtype=torch.long, device=device)
         attention_mask[:context_len] = 1  # Real context tokens
         attention_mask[max_context_len:max_context_len + gen_len] = 1  # Real generated tokens
         

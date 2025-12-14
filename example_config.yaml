@@ -1,0 +1,136 @@
+# Example RL Training Configuration
+# This demonstrates how to configure all aspects of the training pipeline
+
+experiment_name: "vlm_navigation_v1"
+description: "Initial training run with default parameters"
+
+# Model configuration
+model:
+  model_id: "Qwen/Qwen3-VL-8B-Instruct"
+  cache_dir: "/dss/dssmcmlfs01/pn34sa/pn34sa-dss-0000/aydemir"
+  torch_dtype: "bfloat16"
+  device_map: "auto"
+  trust_remote_code: true
+  load_in_8bit: false
+  load_in_4bit: false
+
+# Dataset configuration
+data:
+  dataset_path: "/dss/dssmcmlfs01/pn34sa/pn34sa-dss-0000/aydemir/raw"
+  dataset_name: "arkitscenes"
+  split: "train"
+  num_episodes: 100
+  episodes_per_scene: 5
+  max_episode_len: 10
+  filter_invalid_episodes: true
+  min_turns_per_episode: 1
+  num_workers: 4
+  prefetch_factor: 2
+
+# Generation configuration (for general text generation)
+generation:
+  do_sample: true
+  temperature: 1.0
+  top_p: 0.9
+  top_k: 50
+  max_new_tokens: 512
+  min_new_tokens: 10
+  num_beams: 1
+  repetition_penalty: 1.0
+  no_repeat_ngram_size: 0
+  use_cache: true
+
+# Episode simulator configuration
+simulator:
+  max_steps: 2  # Maximum turns per episode
+  track_action_tokens: true
+  min_action_tokens: 10
+  max_action_tokens: 100
+  # Sampling parameters for episode collection
+  do_sample: true
+  temperature: 1.0
+  top_p: 0.9
+  top_k: 50
+
+# Optimization configuration
+optimization:
+  optimizer: "adamw"
+  learning_rate: 1.0e-5
+  weight_decay: 0.01
+  adam_beta1: 0.9
+  adam_beta2: 0.999
+  adam_epsilon: 1.0e-8
+  max_grad_norm: 1.0
+  gradient_accumulation_steps: 1
+  lr_scheduler_type: "cosine"
+  warmup_steps: 100
+  warmup_ratio: 0.0
+  use_amp: false
+  fp16: false
+  bf16: false
+
+# Reinforcement learning configuration
+rl:
+  batch_size: 8
+  kl_coef: 0.01
+  entropy_coef: 0.01
+  advantage_normalize: true
+  advantage_eps: 1.0e-8
+  ref_model_strategy: "ema"
+  ref_update_interval: 100
+  ref_ema_tau: 0.999
+  use_kl_scheduler: true
+  target_kl: 0.01
+  kl_tolerance: 0.005
+  kl_adaptation_rate: 1.5
+  kl_coef_min: 0.001
+  kl_coef_max: 0.1
+  reward_success: 1.0
+  reward_failure: 0.0
+  reward_invalid: 0.0
+  dropout_invalid_json: true
+  dropout_low_confidence_masking: false
+  min_action_tokens: 10
+  max_action_tokens: 100
+
+# Training loop configuration
+training:
+  num_epochs: 3
+  max_steps: null
+  eval_strategy: "epoch"
+  eval_steps: 100
+  eval_episodes: 50
+  logging_strategy: "steps"
+  logging_steps: 10
+  logging_first_step: true
+  save_strategy: "steps"
+  save_steps: 100
+  save_total_limit: 3
+  save_optimizer: true
+  save_reference_model: true
+  resume_from_checkpoint: null
+  output_dir: "./checkpoints"
+  overwrite_output_dir: false
+  device: "cuda"
+  local_rank: -1
+  seed: 42
+  dataloader_num_workers: 0
+  dataloader_pin_memory: true
+
+# Weights & Biases logging
+wandb:
+  use_wandb: true
+  project: "vlm-navigation-rl"
+  entity: null
+  run_name: null
+  group: null
+  tags: []
+  notes: null
+  log_model: true
+  log_examples: true
+  num_log_examples: 5
+  log_histograms: true
+  log_gradients: false
+  log_interval: 10
+  log_examples_interval: 100
+  log_histograms_interval: 50

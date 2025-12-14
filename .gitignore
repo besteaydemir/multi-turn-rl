@@ -1,2 +1,8 @@
 *.ply
 __pycache__/
+.pytest_cache/
+rl_checkpoints/
+rl_episodes/
+checkpoints/
+logs/
+wandb/

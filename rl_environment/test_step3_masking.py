@@ -138,16 +138,23 @@ def test_episode_quality_evaluation():
         device_map="auto"
     )
     
+    # Create simulator config
+    simulator_config = SimulatorConfig(
+        max_steps=2,
+        track_action_tokens=True,
+        do_sample=True,
+        temperature=1.0,
+        top_p=0.9,
+        top_k=50,
+        min_action_tokens=10,
+        max_action_tokens=100
+    )
+    
     # Create simulator
     simulator = EpisodeSimulator(
         model=model,
         processor=processor,
-        min_action_tokens=10,
-        max_action_tokens=100,
-        do_sample=True,
-        temperature=1.0,
-        top_p=0.9,
-        top_k=50
+        config=simulator_config
     )
     
     # Load environment
