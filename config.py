@@ -142,6 +142,24 @@ class RLConfig:
 
 
 @dataclass
+class SimulatorConfig:
+    """Episode simulator settings."""
+    # Episode parameters
+    max_steps: int = 2  # Maximum steps per episode
+    
+    # Token tracking
+    track_action_tokens: bool = True
+    min_action_tokens: int = 10  # Minimum expected action tokens
+    max_action_tokens: int = 100  # Maximum expected action tokens
+    
+    # Generation sampling (mirrored from GenerationConfig for episode collection)
+    do_sample: bool = True
+    temperature: float = 1.0
+    top_p: float = 0.9
+    top_k: int = 50
+
+
+@dataclass
 class TrainingConfig:
     """Training loop settings."""
     # Epochs and steps
@@ -219,6 +237,7 @@ class RLTrainingConfig:
     model: ModelConfig = field(default_factory=ModelConfig)
     data: DataConfig = field(default_factory=DataConfig)
     generation: GenerationConfig = field(default_factory=GenerationConfig)
+    simulator: SimulatorConfig = field(default_factory=SimulatorConfig)
     optimization: OptimizationConfig = field(default_factory=OptimizationConfig)
     rl: RLConfig = field(default_factory=RLConfig)
     training: TrainingConfig = field(default_factory=TrainingConfig)
@@ -268,6 +287,7 @@ class RLTrainingConfig:
             "model": asdict(self.model),
             "data": asdict(self.data),
             "generation": asdict(self.generation),
+            "simulator": asdict(self.simulator),
             "optimization": asdict(self.optimization),
             "rl": asdict(self.rl),
             "training": asdict(self.training),
@@ -295,6 +315,7 @@ class RLTrainingConfig:
             model=ModelConfig(**config_dict.get("model", {})),
             data=DataConfig(**config_dict.get("data", {})),
             generation=GenerationConfig(**config_dict.get("generation", {})),
+            simulator=SimulatorConfig(**config_dict.get("simulator", {})),
             optimization=OptimizationConfig(**config_dict.get("optimization", {})),
             rl=RLConfig(**config_dict.get("rl", {})),
             training=TrainingConfig(**config_dict.get("training", {})),
@@ -343,6 +364,12 @@ class RLTrainingConfig:
         print(f"  Temperature: {self.generation.temperature}")
         print(f"  Top-p: {self.generation.top_p}")
         print(f"  Top-k: {self.generation.top_k}")
+        
+        print(f"\n--- SIMULATOR ---")
+        print(f"  Max steps per episode: {self.simulator.max_steps}")
+        print(f"  Track action tokens: {self.simulator.track_action_tokens}")
+        print(f"  Action tokens range: [{self.simulator.min_action_tokens}, {self.simulator.max_action_tokens}]")
+        print(f"  Sampling: {self.simulator.do_sample} (T={self.simulator.temperature}, p={self.simulator.top_p}, k={self.simulator.top_k})")
         
         print(f"\n--- OPTIMIZATION ---")
         print(f"  Learning rate: {self.optimization.learning_rate}")

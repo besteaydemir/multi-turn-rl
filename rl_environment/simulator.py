@@ -10,7 +10,7 @@ import time
 import re
 import json
 from pathlib import Path
-from typing import Dict, List, Tuple, Optional, Any
+from typing import Dict, List, Tuple, Optional, Any, TYPE_CHECKING
 from datetime import datetime
 
 from .environment import (
@@ -22,6 +22,9 @@ from .environment import (
 )
 from .masking import ActionTokenMasker
 
+if TYPE_CHECKING:
+    from ..config import SimulatorConfig
+
 
 class EpisodeSimulator:
     """
@@ -32,15 +35,8 @@ class EpisodeSimulator:
         self,
         model,
         processor,
-        device: str = "cuda",
-        max_steps: int = 10,
-        track_action_tokens: bool = True,
-        do_sample: bool = True,
-        temperature: float = 1.0,
-        top_p: float = 0.9,
-        top_k: int = 50,
-        min_action_tokens: int = 10,  # Minimum expected action tokens
-        max_action_tokens: int = 100  # Maximum expected action tokens
+        config: "SimulatorConfig",
+        device: str = "cuda"
     ):
         """
         Initialize episode simulator.
@@ -48,33 +44,29 @@ class EpisodeSimulator:
         Args:
             model: Qwen3VL model
             processor: Qwen3VL processor
+            config: SimulatorConfig with all hyperparameters
             device: Device to run model on
-            max_steps: Maximum steps per episode
-            track_action_tokens: Whether to track action token positions
-            do_sample: Whether to use sampling (vs greedy)
-            temperature: Sampling temperature (higher = more random)
-            top_p: Nucleus sampling threshold
-            top_k: Top-k sampling threshold
-            min_action_tokens: Minimum expected action tokens (for validation)
-            max_action_tokens: Maximum expected action tokens (for validation)
         """
         self.model = model
         self.processor = processor
+        self.config = config
         self.device = device
-        self.max_steps = max_steps
-        self.track_action_tokens = track_action_tokens
-        self.do_sample = do_sample
-        self.temperature = temperature
-        self.top_p = top_p
-        self.top_k = top_k
-        self.min_action_tokens = min_action_tokens
-        self.max_action_tokens = max_action_tokens
+        
+        # Extract config values for convenience
+        self.max_steps = config.max_steps
+        self.track_action_tokens = config.track_action_tokens
+        self.do_sample = config.do_sample
+        self.temperature = config.temperature
+        self.top_p = config.top_p
+        self.top_k = config.top_k
+        self.min_action_tokens = config.min_action_tokens
+        self.max_action_tokens = config.max_action_tokens
         
         # Initialize action token masker (Step 3)
         self.masker = ActionTokenMasker(
             processor=processor,
-            min_action_tokens=min_action_tokens,
-            max_action_tokens=max_action_tokens
+            min_action_tokens=config.min_action_tokens,
+            max_action_tokens=config.max_action_tokens
         )
         
         # Statistics tracking (Step 3 requirement)

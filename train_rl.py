@@ -23,6 +23,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from rl_environment import NavigationEnvironment, EpisodeSimulator, EpisodeBatchCollector
 from rl_trainer import TrainerConfig, RLTrainer, EpisodeDataLoader
+from config import SimulatorConfig
 
 # Import rendering utilities
 from render_point_cloud_qwen_angle import (
@@ -38,7 +39,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Train VLM with policy gradient RL")
     
     # Model
-    parser.add_argument("--model_id", type=str, default="Qwen/Qwen3-VL-8B-Instruct",
+    parser.add_argument("--model_id", type=str, default="Qwen/Qwen3-VL-2B-Instruct",
                         help="Pretrained model ID")
     parser.add_argument("--cache_dir", type=str,
                         default="/dss/dssmcmlfs01/pn34sa/pn34sa-dss-0000/aydemir",
@@ -169,17 +170,24 @@ def collect_episodes(args, policy_model, processor):
     
     print(f"Using {len(scenes)} scenes from VSI-Bench (train split)")
     
-    # Create episode simulator
-    simulator = EpisodeSimulator(
-        model=policy_model,
-        processor=processor,
-        device=args.device,
+    # Create simulator config
+    simulator_config = SimulatorConfig(
         max_steps=10,
         track_action_tokens=True,
         do_sample=True,
         temperature=1.0,
         top_p=0.9,
-        top_k=50
+        top_k=50,
+        min_action_tokens=10,
+        max_action_tokens=100
+    )
+    
+    # Create episode simulator
+    simulator = EpisodeSimulator(
+        model=policy_model,
+        processor=processor,
+        config=simulator_config,
+        device=args.device
     )
     
     # Create batch collector
@@ -320,6 +328,8 @@ def train(args, policy_model, dataloader):
         batch_size=args.batch_size,
         output_dir=args.output_dir,
         device=args.device,
+        # Mixed precision training (required for bfloat16)
+        use_amp=True,
         # Reference model config
         ref_model_strategy="ema",          # Use EMA (recommended)
         ref_ema_tau=0.999,                 # τ = 0.999 for stable reference

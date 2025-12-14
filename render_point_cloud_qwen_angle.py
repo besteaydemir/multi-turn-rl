@@ -25,7 +25,7 @@ from qwen_vl_utils import process_vision_info  # assumed available in your envir
 
 # ----------------- Config -----------------
 CACHE_DIR = "/dss/dssmcmlfs01/pn34sa/pn34sa-dss-0000/aydemir"
-MODEL_ID = "Qwen/Qwen3-VL-8B-Instruct"
+MODEL_ID = "Qwen/Qwen3-VL-2B-Instruct"
 MESH_BASE_DIR = "/dss/dssmcmlfs01/pn34sa/pn34sa-dss-0000/aydemir/raw"
 ARKIT_CSV_PATH = "/dss/dsshome1/06/di38riq/ARKitScenes/raw/raw_train_val_splits.csv"
 METADATA_CSV_PATH = "/dss/dssmcmlfs01/pn34sa/pn34sa-dss-0000/aydemir/raw/metadata.csv"
@@ -34,7 +34,7 @@ import pandas as pd
 import cv2
 
 # NUM_STEPS = 5
-NUM_STEPS = 10  # Max iterations, but model can terminate early with "done": true
+NUM_STEPS = 8  # Max iterations, but model can terminate early with "done": true
 IMAGE_WH = (1024, 768)
 DEFAULT_FX_FY = 300.0   # wider FOV
 CAM_HEIGHT = 1.6        # meters above floor (heuristic)
@@ -658,6 +658,7 @@ def main_vsi_bench_loop(mesh_base_dir=MESH_BASE_DIR, num_steps_per_question=NUM_
     print(f"[INFO] Loaded {len(questions)} questions\n")
 
     results = []
+    csv_rows = []  # Track CSV data for all runs
 
     # Determine experiment directory
     if continue_from:
@@ -668,6 +669,24 @@ def main_vsi_bench_loop(mesh_base_dir=MESH_BASE_DIR, num_steps_per_question=NUM_
         exp_base_dir = Path("experiment_logs") / exp_timestamp
         exp_base_dir.mkdir(parents=True, exist_ok=True)
         print(f"[INFO] 📁 Experiment logs: {exp_base_dir.resolve()}\n")
+
+    # Load existing results if continuing
+    results_file = exp_base_dir / "results.json"
+    if continue_from and results_file.exists():
+        with open(results_file, "r") as f:
+            results = json.load(f)
+        print(f"[INFO] Loaded {len(results)} existing results from {results_file}\n")
+    else:
+        results = []
+
+    # Load existing CSV if continuing
+    csv_file = exp_base_dir / "results.csv"
+    if continue_from and csv_file.exists():
+        csv_df = pd.read_csv(csv_file)
+        csv_rows = csv_df.to_dict('records')
+        print(f"[INFO] Loaded {len(csv_rows)} existing CSV rows from {csv_file}\n")
+    else:
+        csv_rows = []
 
     # Track completed questions
     completed_questions = set()
@@ -711,7 +730,8 @@ def main_vsi_bench_loop(mesh_base_dir=MESH_BASE_DIR, num_steps_per_question=NUM_
 
         # Run reasoning pipeline with shared experiment base directory
         print(f"[INFO] Starting reasoning pipeline for question {q_idx}...")
-        model_answer = run_pipeline(
+        run_timestamp = datetime.now().strftime("%y%m%d-%H%M%S")
+        model_answer, elapsed_time, actual_steps = run_pipeline(
             mesh_file,
             question=question_text,
             choices=choices,
@@ -738,7 +758,25 @@ def main_vsi_bench_loop(mesh_base_dir=MESH_BASE_DIR, num_steps_per_question=NUM_
             "correct": is_correct
         })
 
-        # Print running accuracy
+        # Add to CSV tracking
+        csv_rows.append({
+            "question": question_text,
+            "scene_id": scene_id,
+            "gt_answer": ground_truth_letter,
+            "model_answer": model_answer,
+            "time_seconds": elapsed_time,
+            "num_steps": actual_steps,
+            "timestamp": run_timestamp
+        })
+
+        # Save incremental results (both JSON and CSV)
+        with open(results_file, "w") as f:
+            json.dump(results, f, indent=2)
+        
+        csv_df = pd.DataFrame(csv_rows)
+        csv_df.to_csv(csv_file, index=False)
+
+        # Print running accuracy (includes all completed questions from current and previous runs)
         correct_so_far = sum(1 for r in results if r["correct"])
         total_so_far = len([r for r in results if r["status"] == "COMPLETED"])
         running_accuracy = (100 * correct_so_far / total_so_far) if total_so_far > 0 else 0
@@ -758,18 +796,22 @@ def main_vsi_bench_loop(mesh_base_dir=MESH_BASE_DIR, num_steps_per_question=NUM_
         status_icon = "✅" if r["correct"] else ("⏭️ " if "SKIPPED" in r["status"] else "❌")
         print(f"{status_icon} {r['scene_id']:6s} | {r['model_answer']:1s} vs {r['ground_truth']:1s} | {r['question'][:60]}")
 
-    # Save results to JSON in the experiment directory
-    results_file = exp_base_dir / "results.json"
+    # Save final results to JSON and CSV in the experiment directory
     with open(results_file, "w") as f:
         json.dump(results, f, indent=2)
     print(f"\n[INFO] Results saved to: {results_file}")
+    
+    csv_df = pd.DataFrame(csv_rows)
+    csv_df.to_csv(csv_file, index=False)
+    print(f"[INFO] CSV results saved to: {csv_file}")
 
 def run_pipeline(mesh_path: Path, question="", choices=None, cache_dir=CACHE_DIR, num_steps=NUM_STEPS, question_id=0, experiment_base_dir="experiment_logs", scene_id=None):
     """
     Run the reasoning pipeline for a single question.
-    Returns the model's final answer (A, B, C, D, etc.)
+    Returns tuple: (model_answer, elapsed_time_seconds, actual_steps_taken)
     """
     start_time = time.time()  # Start timing
+    actual_steps = 0  # Track actual steps taken
 
     if choices is None:
         choices = []
@@ -862,6 +904,7 @@ def run_pipeline(mesh_path: Path, question="", choices=None, cache_dir=CACHE_DIR
     # send initial step and then iterate
     print(f"[INFO] 🤖 Starting reasoning loop (max {num_steps} steps)...")
     for step in range(0, num_steps+1):
+        actual_steps = step + 1  # Track the current step count
         print(f"\n[Step {step:02d}] " + "─" * 40)
         # Check if this is the final step
         is_final_step = (step == num_steps)
@@ -1065,8 +1108,9 @@ def run_pipeline(mesh_path: Path, question="", choices=None, cache_dir=CACHE_DIR
     end_time = time.time()  # End timing
     elapsed_time = end_time - start_time
     print(f"[INFO] Time taken to answer question {question_id}: {elapsed_time:.2f} seconds")
+    print(f"[INFO] Actual steps taken: {actual_steps}")
 
-    return final_answer
+    return final_answer, elapsed_time, actual_steps
 
 # Main entry for batch evaluation
 if __name__ == "__main__":
@@ -1093,7 +1137,9 @@ if __name__ == "__main__":
         main_vsi_bench_loop(num_steps_per_question=args.steps, continue_from=args.continue_from)
     elif args.ply:
         print(f"[INFO] Running single mesh: {args.ply}")
-        answer = run_pipeline(Path(args.ply), question=args.question, num_steps=args.steps)
+        answer, elapsed_time, actual_steps = run_pipeline(Path(args.ply), question=args.question, num_steps=args.steps)
         print(f"\n[RESULT] Model Answer: {answer}")
+        print(f"[RESULT] Time taken: {elapsed_time:.2f} seconds")
+        print(f"[RESULT] Steps taken: {actual_steps}")
     else:
         parser.print_help()
