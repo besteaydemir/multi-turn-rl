@@ -59,8 +59,14 @@ def parse_args():
     # Training
     parser.add_argument("--num_epochs", type=int, default=3,
                         help="Number of training epochs")
-    parser.add_argument("--batch_size", type=int, default=8,
-                        help="Batch size (N >= 8 recommended for LOO)")
+    parser.add_argument("--batch_size", type=int, default=2,
+                        help="Micro batch size (start small with 2-4)")
+    parser.add_argument("--gradient_accumulation_steps", type=int, default=4,
+                        help="Gradient accumulation steps (effective_batch_size = batch_size * grad_accum)")
+    parser.add_argument("--online_rl", action="store_true",
+                        help="Enable online RL: collect new episodes after each model update")
+    parser.add_argument("--num_updates", type=int, default=10,
+                        help="Number of policy updates for online RL (replaces num_epochs)")
     parser.add_argument("--learning_rate", type=float, default=1e-5,
                         help="Learning rate (1e-5 to 5e-6 recommended)")
     parser.add_argument("--kl_coef", type=float, default=0.01,
@@ -106,6 +112,10 @@ def load_models(args):
         torch_dtype=torch.bfloat16,
         device_map=args.device
     )
+    
+    # Enable gradient checkpointing to save memory
+    policy_model.gradient_checkpointing_enable()
+    print("[Memory] Gradient checkpointing enabled")
     
     print(f"Model loaded successfully!")
     print(f"  Policy model parameters: {sum(p.numel() for p in policy_model.parameters()):,}")
@@ -157,12 +167,22 @@ def load_vsi_bench_questions_for_training(train_split=0.8):
 
 def collect_episodes(args, policy_model, processor):
     """Collect episodes using current policy from VSI-Bench filtered questions."""
+    
+    # Disable gradient checkpointing during inference
+    if hasattr(policy_model, 'gradient_checkpointing_disable'):
+        policy_model.gradient_checkpointing_disable()
+    policy_model.eval()  # Set to eval mode
+    
     print("\n" + "=" * 80)
     print("COLLECTING EPISODES")
     print("=" * 80)
     
     # Load VSI-Bench questions with same filtering as original pipeline
-    train_questions, val_questions = load_vsi_bench_questions_for_training(args.train_split)
+    # Cache this to avoid reloading every time
+    if not hasattr(collect_episodes, '_train_questions'):
+        collect_episodes._train_questions, _ = load_vsi_bench_questions_for_training(args.train_split)
+    
+    train_questions = collect_episodes._train_questions
     
     # Use training split for episode collection
     num_scenes_needed = min(len(train_questions), args.num_episodes // args.episodes_per_scene)
@@ -182,7 +202,7 @@ def collect_episodes(args, policy_model, processor):
         max_action_tokens=100
     )
     
-    # Create episode simulator
+    # Create episode simulator with current policy
     simulator = EpisodeSimulator(
         model=policy_model,
         processor=processor,
@@ -271,6 +291,11 @@ def collect_episodes(args, policy_model, processor):
                 print(f"  Episode {ep_idx+1}/{args.episodes_per_scene}: {'✓ Valid' if episode.is_valid else '✗ Invalid'}")
             except Exception as e:
                 print(f"  Episode {ep_idx+1}/{args.episodes_per_scene}: ✗ Error - {e}")
+                import traceback
+                if args.device == "cuda":
+                    print("  (Detailed traceback suppressed, run on CPU for debugging)")
+                else:
+                    traceback.print_exc()
     
     print(f"\nCollected {len(all_episodes)} episodes total")
     
@@ -286,6 +311,11 @@ def collect_episodes(args, policy_model, processor):
     print(f"  Success rate: {success_rate:.1%}")
     print(f"  Average turns: {sum(len(ep.turns) for ep in all_episodes) / len(all_episodes):.1f}")
     print("=" * 80)
+    
+    # Re-enable gradient checkpointing for training
+    if hasattr(policy_model, 'gradient_checkpointing_enable'):
+        policy_model.gradient_checkpointing_enable()
+    policy_model.train()  # Set back to train mode
     
     return all_episodes
     
@@ -313,7 +343,7 @@ def create_dataloader(episodes, processor, args):
 
 
 def train(args, policy_model, dataloader):
-    """Train policy model with RL."""
+    """Train policy model with RL (offline mode)."""
     print("\n" + "=" * 80)
     print("TRAINING")
     print("=" * 80)
@@ -326,18 +356,23 @@ def train(args, policy_model, dataloader):
         entropy_coef=args.entropy_coef,
         num_epochs=args.num_epochs,
         batch_size=args.batch_size,
+        gradient_accumulation_steps=args.gradient_accumulation_steps,
         output_dir=args.output_dir,
         device=args.device,
-        # Mixed precision training (required for bfloat16)
+        # Mixed precision training with bfloat16
+        # Autocast enabled but no GradScaler (bfloat16 doesn't need it)
         use_amp=True,
-        # Reference model config
-        ref_model_strategy="ema",          # Use EMA (recommended)
-        ref_ema_tau=0.999,                 # τ = 0.999 for stable reference
-        # KL scheduling
-        use_kl_scheduler=True,             # Enable adaptive β
-        target_kl=0.01,                    # Target KL divergence
-        kl_tolerance=0.005,                # ±0.005 tolerance
-        kl_adaptation_rate=1.5             # Adapt β by 1.5x
+        amp_dtype=torch.bfloat16,
+        # Reference model config - DISABLED to save memory
+        # With 40GB VRAM, 2 models + optimizer + activations is too much
+        ref_model_strategy=None,           # Disable reference model to save ~4GB
+        # If you need KL penalty, re-enable after fixing other memory issues:
+        # ref_model_strategy="ema", ref_ema_tau=0.999
+        # KL scheduling (disabled since no reference model)
+        use_kl_scheduler=False,
+        target_kl=0.01,
+        kl_tolerance=0.005,
+        kl_adaptation_rate=1.5
     )
     
     # Create trainer (it will create reference model internally)
@@ -353,6 +388,89 @@ def train(args, policy_model, dataloader):
     return trainer
 
 
+def train_online(args, policy_model, processor):
+    """
+    Train policy model with online RL.
+    
+    Collects new episodes with current policy after each model update.
+    """
+    print("\n" + "=" * 80)
+    print("ONLINE RL TRAINING")
+    print("=" * 80)
+    
+    # Create trainer config (single update per batch)
+    config = TrainerConfig(
+        learning_rate=args.learning_rate,
+        max_grad_norm=args.max_grad_norm,
+        kl_coef=args.kl_coef,
+        entropy_coef=args.entropy_coef,
+        num_epochs=1,  # Single pass through each batch
+        batch_size=args.batch_size,
+        gradient_accumulation_steps=args.gradient_accumulation_steps,
+        output_dir=args.output_dir,
+        device=args.device,
+        use_amp=True,
+        amp_dtype=torch.bfloat16,
+        ref_model_strategy=None,
+        use_kl_scheduler=False,
+        target_kl=0.01,
+        kl_tolerance=0.005,
+        kl_adaptation_rate=1.5
+    )
+    
+    # Create trainer
+    trainer = RLTrainer(
+        model=policy_model,
+        dataloader=None,  # Will be updated each iteration
+        config=config
+    )
+    
+    print(f"Will perform {args.num_updates} policy updates")
+    print(f"Each update: collect {args.num_episodes} episodes → train on {args.batch_size} batch")
+    print("=" * 80)
+    
+    # Online training loop
+    for update_idx in range(args.num_updates):
+        print(f"\n{'='*80}")
+        print(f"POLICY UPDATE {update_idx + 1}/{args.num_updates}")
+        print(f"{'='*80}")
+        
+        # Step 1: Collect episodes with current policy
+        print(f"[Update {update_idx + 1}] Collecting episodes with current policy...")
+        episodes = collect_episodes(args, policy_model, processor)
+        
+        # Step 2: Create fresh dataloader
+        dataloader = create_dataloader(episodes, processor, args)
+        trainer.dataloader = dataloader
+        
+        # Step 3: Train on collected episodes (single epoch)
+        print(f"[Update {update_idx + 1}] Training on collected episodes...")
+        trainer.epoch = update_idx  # Track which update we're on
+        epoch_metrics = trainer.train_epoch()
+        
+        # Step 4: Log update statistics
+        epoch_stats = trainer._compute_epoch_stats(epoch_metrics)
+        print(f"\n[Update {update_idx + 1}] completed:")
+        print(f"  Loss: {epoch_stats.get('loss/total', 0):.4f}")
+        print(f"  Mean reward: {epoch_stats.get('rewards/mean', 0):.3f}")
+        print(f"  Mean advantage: {epoch_stats.get('advantages/mean', 0):.3f}")
+        if 'entropy/mean' in epoch_stats:
+            print(f"  Mean entropy: {epoch_stats['entropy/mean']:.4f}")
+        
+        # Step 5: Save checkpoint periodically
+        if (update_idx + 1) % 5 == 0:
+            print(f"[Checkpoint] Saving at update {update_idx + 1}")
+            trainer._save_training_checkpoint(is_epoch_end=True)
+    
+    # Final save
+    print("\n" + "=" * 80)
+    print("ONLINE TRAINING COMPLETED")
+    print("=" * 80)
+    trainer._save_training_checkpoint(is_final=True)
+    
+    return trainer
+
+
 def main():
     args = parse_args()
     
@@ -363,8 +481,16 @@ def main():
     print(f"\nConfiguration:")
     print(f"  Model: {args.model_id}")
     print(f"  Dataset: {args.dataset_path}")
-    print(f"  Episodes: {args.num_episodes}")
-    print(f"  Batch size: {args.batch_size}")
+    print(f"  Mode: {'ONLINE RL' if args.online_rl else 'OFFLINE RL'}")
+    if args.online_rl:
+        print(f"  Policy updates: {args.num_updates}")
+        print(f"  Episodes per update: {args.num_episodes}")
+    else:
+        print(f"  Episodes: {args.num_episodes}")
+        print(f"  Epochs: {args.num_epochs}")
+    print(f"  Micro batch size: {args.batch_size}")
+    print(f"  Gradient accumulation: {args.gradient_accumulation_steps}")
+    print(f"  Effective batch size: {args.batch_size * args.gradient_accumulation_steps}")
     print(f"  Learning rate: {args.learning_rate}")
     print(f"  KL coefficient: {args.kl_coef}")
     print(f"  Entropy coefficient: {args.entropy_coef}")
@@ -374,14 +500,16 @@ def main():
     # Load models
     policy_model, processor = load_models(args)
     
-    # Collect episodes
-    episodes = collect_episodes(args, policy_model, processor)
-    
-    # Create dataloader
-    dataloader = create_dataloader(episodes, processor, args)
-    
-    # Train
-    trainer = train(args, policy_model, dataloader)
+    if args.online_rl:
+        # Online RL: integrate episode collection into training loop
+        print("\n🔄 ONLINE RL MODE: Episodes will be re-collected after each policy update")
+        train_online(args, policy_model, processor)
+    else:
+        # Offline RL: collect once, train multiple epochs
+        print("\n📦 OFFLINE RL MODE: Training on fixed episode dataset")
+        episodes = collect_episodes(args, policy_model, processor)
+        dataloader = create_dataloader(episodes, processor, args)
+        trainer = train(args, policy_model, dataloader)
     
     print("\n" + "=" * 80)
     print("TRAINING PIPELINE COMPLETED!")

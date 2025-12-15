@@ -78,6 +78,7 @@ class TrainerConfig:
     output_dir: str = "./checkpoints"
     save_total_limit: int = 3             # Keep only N latest checkpoints
     save_optimizer: bool = True           # Save optimizer state
+    save_every_n_epochs: int = 5          # Save checkpoint every N epochs (0 = use step-based saving)
     resume_from_checkpoint: Optional[str] = None  # Path to checkpoint to resume from
     
     # Device
@@ -85,6 +86,7 @@ class TrainerConfig:
     
     # Mixed precision (optional)
     use_amp: bool = False                 # Automatic Mixed Precision
+    amp_dtype: torch.dtype = torch.bfloat16  # Dtype for autocast (bfloat16 or float16)
 
 
 class RLTrainer:
@@ -124,15 +126,19 @@ class RLTrainer:
         # Move models to device
         self.model = self.model.to(config.device)
         
-        # Setup reference model manager
-        self.ref_manager = ReferenceModelManager(
-            policy_model=self.model,
-            strategy=config.ref_model_strategy,
-            update_interval=config.ref_update_interval,
-            ema_tau=config.ref_ema_tau,
-            device=config.device
-        )
-        self.ref_model = self.ref_manager.get_reference_model()
+        # Setup reference model manager (if enabled)
+        if config.ref_model_strategy is not None:
+            self.ref_manager = ReferenceModelManager(
+                policy_model=self.model,
+                strategy=config.ref_model_strategy,
+                update_interval=config.ref_update_interval,
+                ema_tau=config.ref_ema_tau,
+                device=config.device
+            )
+            self.ref_model = self.ref_manager.get_reference_model()
+        else:
+            self.ref_manager = None
+            self.ref_model = None
         
         # Setup KL scheduler
         if config.use_kl_scheduler:
@@ -154,7 +160,11 @@ class RLTrainer:
         )
         
         # Setup learning rate scheduler
-        total_steps = len(dataloader) * config.num_epochs
+        # For online RL with None dataloader, skip schedulers or use dummy values
+        if dataloader is not None:
+            total_steps = len(dataloader) * config.num_epochs
+        else:
+            total_steps = 1000  # Dummy value for online RL
         
         if config.warmup_steps > 0:
             self.warmup_scheduler = LinearLR(
@@ -166,7 +176,7 @@ class RLTrainer:
         else:
             self.warmup_scheduler = None
         
-        if config.use_cosine_schedule:
+        if config.use_cosine_schedule and dataloader is not None:
             self.scheduler = CosineAnnealingLR(
                 self.optimizer,
                 T_max=total_steps - config.warmup_steps,
@@ -215,8 +225,11 @@ class RLTrainer:
         if config.resume_from_checkpoint:
             self._resume_from_checkpoint(config.resume_from_checkpoint)
         
-        # Mixed precision scaler (optional)
-        self.scaler = torch.cuda.amp.GradScaler() if config.use_amp else None
+        # Mixed precision scaler (only for float16, not bfloat16)
+        # Note: autocast can be used with bfloat16, but GradScaler is only for float16
+        self.scaler = None
+        if config.use_amp and config.amp_dtype == torch.float16:
+            self.scaler = torch.cuda.amp.GradScaler()
     
     def _resume_from_checkpoint(self, checkpoint_path: str):
         """Resume training from checkpoint."""
@@ -256,6 +269,18 @@ class RLTrainer:
         # Ensure model is in training mode
         self.model.train()
         
+        # DEBUG: Check if batch has valid data (once per epoch)
+        if self.global_step == 0 or (hasattr(self, '_last_debug_epoch') and self._last_debug_epoch != self.epoch):
+            print(f"\n[DEBUG] Epoch {self.epoch + 1} - First batch stats:")
+            print(f"  Batch size: {batch.batch_size}")
+            print(f"  Rewards shape: {batch.rewards.shape}")
+            print(f"  Rewards: {batch.rewards.tolist()}")
+            print(f"  Context input_ids shape: {batch.context_input_ids.shape}")
+            print(f"  Generated_ids shape: {batch.generated_ids.shape}")
+            print(f"  Action masks shape: {batch.action_masks.shape}")
+            print(f"  Action masks sum: {batch.action_masks.sum(dim=1).tolist()}")
+            self._last_debug_epoch = self.epoch
+        
         # Step 1: Compute LOO baseline
         baselines = compute_loo_baseline(batch)
         
@@ -266,8 +291,14 @@ class RLTrainer:
             normalize=True
         )
         
+        # DEBUG: Check advantages (only first time)
+        if self.global_step == 0:
+            print(f"  Baselines: {baselines.tolist()}")
+            print(f"  Advantages (before norm): {(batch.rewards - baselines).tolist()}")
+            print(f"  Advantages (after norm): {advantages.tolist()}")
+        
         # Step 3: Compute sequence log-probs
-        with torch.cuda.amp.autocast(enabled=self.config.use_amp):
+        with torch.amp.autocast('cuda', enabled=self.config.use_amp, dtype=self.config.amp_dtype):
             logprobs_result = compute_sequence_logprobs(
                 model=self.model,
                 batch=batch,
@@ -286,6 +317,16 @@ class RLTrainer:
                 kl_coef=current_kl_coef,
                 entropy_coef=self.config.entropy_coef
             )
+            
+            # DEBUG: Check loss components
+            if self.global_step == 0:
+                print(f"  LogProbs (logpi_seq): {logprobs_result.logpi_seq.tolist()}")
+                print(f"  Num action tokens: {logprobs_result.num_action_tokens.tolist()}")
+                print(f"  Mean logpi: {logprobs_result.mean_logpi.tolist()}")
+                pg_term = -(logprobs_result.logpi_seq * advantages)
+                print(f"  PG loss term (before mean): {pg_term.tolist()}")
+                print(f"  Loss components: PG={metrics['loss/policy_gradient']:.6f}, KL={metrics['loss/kl_penalty']:.6f}, Entropy={metrics['loss/entropy_bonus']:.6f}")
+                print(f"  Total loss: {loss.item():.6f}")
             
             # Scale loss for gradient accumulation
             loss = loss / self.config.gradient_accumulation_steps
@@ -334,9 +375,10 @@ class RLTrainer:
             self.scheduler.step()
         
         # Update reference model
-        ref_updated = self.ref_manager.maybe_update(self.model, self.global_step)
-        if ref_updated and self.config.ref_model_strategy == "periodic":
-            print(f"  Reference model updated at step {self.global_step}")
+        if self.ref_manager is not None:
+            ref_updated = self.ref_manager.maybe_update(self.model, self.global_step)
+            if ref_updated and self.config.ref_model_strategy == "periodic":
+                print(f"  Reference model updated at step {self.global_step}")
         
         return grad_norm.item()
     
@@ -365,8 +407,11 @@ class RLTrainer:
                     accumulated_metrics[key] = []
                 accumulated_metrics[key].append(value)
             
-            # Optimizer step (every N accumulation steps)
-            if (step + 1) % self.config.gradient_accumulation_steps == 0:
+            # Optimizer step (every N accumulation steps OR at end of epoch)
+            is_last_step = (step + 1) == len(self.dataloader)
+            should_update = ((step + 1) % self.config.gradient_accumulation_steps == 0) or is_last_step
+            
+            if should_update:
                 grad_norm = self.optimizer_step()
                 
                 # Average accumulated metrics
@@ -402,14 +447,15 @@ class RLTrainer:
                 if self.global_step % self.config.log_interval == 0:
                     self._log_step_metrics(step_metrics, batch)
                 
-                # Save checkpoint
-                if should_save_checkpoint(
-                    step=self.global_step,
-                    save_interval=self.config.save_interval,
-                    last_save_time=self.last_save_time
-                ):
-                    self._save_training_checkpoint()
-                    self.last_save_time = time.time()
+                # Save checkpoint (only if using step-based saving)
+                if self.config.save_every_n_epochs == 0:
+                    if should_save_checkpoint(
+                        step=self.global_step,
+                        save_interval=self.config.save_interval,
+                        last_save_time=self.last_save_time
+                    ):
+                        self._save_training_checkpoint()
+                        self.last_save_time = time.time()
                 
                 self.global_step += 1
         
@@ -448,8 +494,8 @@ class RLTrainer:
             
             print(f"\nEpoch {epoch + 1}/{self.config.num_epochs} completed in {epoch_time:.1f}s")
             print(f"  Loss: {epoch_stats.get('loss/total', 0):.4f}")
-            print(f"  Mean reward: {epoch_stats.get('reward/mean', 0):.3f}")
-            print(f"  Mean advantage: {epoch_stats.get('advantage/mean', 0):.3f}")
+            print(f"  Mean reward: {epoch_stats.get('rewards/mean', 0):.3f}")
+            print(f"  Mean advantage: {epoch_stats.get('advantages/mean', 0):.3f}")
             if 'kl/mean' in epoch_stats:
                 print(f"  Mean KL: {epoch_stats['kl/mean']:.4f}")
             if 'entropy/mean' in epoch_stats:
@@ -460,8 +506,16 @@ class RLTrainer:
                 epoch_log = {f"epoch/{k}": v for k, v in epoch_stats.items()}
                 self.logger.log_training_step(self.global_step, epoch_log)
             
-            # Save epoch checkpoint
-            self._save_training_checkpoint(is_epoch_end=True)
+            # Save epoch checkpoint (only if using epoch-based saving)
+            if self.config.save_every_n_epochs > 0:
+                if (epoch + 1) % self.config.save_every_n_epochs == 0:
+                    print(f"[Checkpoint] Saving at epoch {epoch + 1}")
+                    self._save_training_checkpoint(is_epoch_end=True)
+                else:
+                    print(f"[Checkpoint] Skipping save (will save every {self.config.save_every_n_epochs} epochs)")
+            else:
+                # Step-based saving (save every epoch for backward compatibility)
+                self._save_training_checkpoint(is_epoch_end=True)
         
         print("\n" + "=" * 80)
         print("TRAINING COMPLETED")

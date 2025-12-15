@@ -371,7 +371,9 @@ def compute_loo_baseline(batch) -> torch.Tensor:
         device = batch.device
     
     if N < 2:
-        raise ValueError(f"LOO baseline requires N >= 2 episodes, got {N}")
+        # Fallback: use zero baseline (no variance reduction)
+        print(f"Warning: LOO baseline requires N >= 2 episodes, got {N}. Using zero baseline.")
+        return torch.zeros(N, dtype=torch.float32, device=device)
     
     baselines = torch.zeros(N, dtype=torch.float32, device=device)
     
@@ -530,6 +532,15 @@ class EpisodeDataLoader:
         print(f"Average reward: {stats['avg_reward']:.3f}")
         print(f"Batch size: {stats['batch_size']}")
         print(f"Number of batches per epoch: {stats['num_batches']}")
+        
+        # Additional debugging for zero rewards
+        if stats['avg_reward'] == 0.0:
+            print("\n⚠️  WARNING: Average reward is 0.0!")
+            print("Checking individual episode rewards:")
+            for i, ep in enumerate(self.episodes[:5]):  # Show first 5
+                print(f"  Episode {i}: {len(ep.turns)} turns, reward={ep.final_reward}")
+                if len(ep.turns) > 0:
+                    print(f"    Turn 0 has {len(ep.turns[0].action_tokens) if ep.turns[0].action_tokens else 0} action tokens")
         print("=" * 80)
 
 

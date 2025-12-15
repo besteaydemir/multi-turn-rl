@@ -6,3 +6,5 @@ rl_episodes/
 checkpoints/
 logs/
 wandb/
+experiment_logs/
+*.code-workspace
