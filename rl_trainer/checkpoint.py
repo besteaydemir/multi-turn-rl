@@ -166,10 +166,15 @@ class CheckpointManager:
         print(f"  ✓ RNG states saved")
         
         # 7. Save training state
+        # Convert torch.dtype to string for JSON serialization
+        config_serializable = dict(config)
+        if "amp_dtype" in config_serializable and hasattr(config_serializable["amp_dtype"], "__module__"):
+            config_serializable["amp_dtype"] = str(config_serializable["amp_dtype"])
+        
         training_state = {
             "step": step,
             "epoch": epoch,
-            "config": config,
+            "config": config_serializable,
             "metrics": metrics or {},
             "timestamp": timestamp,
             "is_best": is_best

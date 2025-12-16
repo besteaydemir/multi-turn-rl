@@ -382,8 +382,10 @@ def build_instruction_natural(R_rounded, t_rounded, question, bbox=None, options
 """
         important_note = "IMPORTANT: Keep exploring and DO NOT output an answer unless you are ready to stop (done=true). Answer and done=true should come together, not separately."
 
-    # Replace the first sentence of the question with a coherent starting point
-    question = question.replace("You are a robot beginning at", "If you begin navigating at")
+    # Preprocess question text (already done if coming from train_rl.py, but ensure consistency)
+    # This is already handled by the question text passed in, but keep the replacement for standalone usage
+    if "You are a robot beginning at" in question:
+        question = question.replace("You are a robot beginning at", "If you begin navigating at")
 
     # Add a note for Qwen to find the starting place first
     starting_place_note = "\n**Note:** Your first task is to identify the starting place mentioned in the question.\n"

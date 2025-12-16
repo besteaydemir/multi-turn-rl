@@ -40,7 +40,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Train VLM with policy gradient RL")
     
     # Model
-    parser.add_argument("--model_id", type=str, default="Qwen/Qwen3-VL-8B-Instruct",
+    parser.add_argument("--model_id", type=str, default="Qwen/Qwen3-VL-2B-Instruct",
                         help="Pretrained model ID")
     parser.add_argument("--cache_dir", type=str,
                         default="/dss/dssmcmlfs01/pn34sa/pn34sa-dss-0000/aydemir",
@@ -126,10 +126,21 @@ def load_models(args):
     return policy_model, processor
 
 
-def load_vsi_bench_questions_for_training(train_split=0.8):
+def preprocess_question(question: str) -> str:
+    """Preprocess question text to match evaluation format."""
+    # Replace "You are a robot beginning at" with "If you begin navigating at"
+    question = question.replace("You are a robot beginning at", "If you begin navigating at")
+    return question
+
+
+def load_vsi_bench_questions_for_training(train_split=0.8, random_seed=42):
     """
     Load VSI-Bench questions filtered by arkitscenes + route_planning.
     Same filtering logic as render_point_cloud_qwen_angle.py.
+    
+    Args:
+        train_split: Fraction for training (default 0.8 = 80%)
+        random_seed: Random seed for reproducible splits (default 42)
     
     Returns:
         train_questions: List of question dicts for training (80%)
@@ -146,15 +157,21 @@ def load_vsi_bench_questions_for_training(train_split=0.8):
     )
     print(f"[INFO] ✅ Filtered to {len(filtered)} route_planning questions")
     
-    # Convert to list of dicts
+    # Convert to list of dicts with preprocessed questions
     questions = []
     for row in filtered:
         questions.append({
             "scene_id": row["scene_name"],  # This is the video_id (numeric)
-            "question": row["question"],
+            "question": preprocess_question(row["question"]),  # Preprocess question text
             "choices": row.get("options", ["A", "B", "C", "D"]),
             "ground_truth": row.get("ground_truth", "A"),
         })
+    
+    # Shuffle with fixed seed for reproducibility
+    import random
+    rng = random.Random(random_seed)
+    rng.shuffle(questions)
+    print(f"[INFO] Shuffled questions with seed={random_seed}")
     
     # Split into train/val
     split_idx = int(len(questions) * train_split)
@@ -206,7 +223,8 @@ def collect_episodes(args, policy_model, processor, update_idx=None):
     # Load VSI-Bench questions with same filtering as original pipeline
     # Cache this to avoid reloading every time
     if not hasattr(collect_episodes, '_train_questions'):
-        collect_episodes._train_questions, _ = load_vsi_bench_questions_for_training(args.train_split)
+        collect_episodes._train_questions, collect_episodes._val_questions = load_vsi_bench_questions_for_training(args.train_split)
+        print(f"[INFO] Loaded {len(collect_episodes._train_questions)} train, {len(collect_episodes._val_questions)} val questions")
     
     train_questions = collect_episodes._train_questions
     
@@ -344,8 +362,168 @@ def collect_episodes(args, policy_model, processor, update_idx=None):
     policy_model.train()  # Set back to train mode
     
     return all_episodes
+
+
+def validate(args, policy_model, processor, update_idx=None, max_val_episodes=None):
+    """
+    Run validation on val split with deterministic generation (do_sample=False).
     
-    return episodes
+    Args:
+        args: Training arguments
+        policy_model: Current policy model
+        processor: Model processor
+        update_idx: Current update index (for logging)
+        max_val_episodes: Maximum validation episodes to run (None = all)
+        
+    Returns:
+        Dict with validation metrics
+    """
+    # Disable gradient checkpointing during inference
+    if hasattr(policy_model, 'gradient_checkpointing_disable'):
+        policy_model.gradient_checkpointing_disable()
+    policy_model.eval()
+    
+    print("\n" + "=" * 80)
+    print("VALIDATION")
+    print("=" * 80)
+    
+    # Get val questions (cached from collect_episodes)
+    if not hasattr(collect_episodes, '_val_questions'):
+        _, collect_episodes._val_questions = load_vsi_bench_questions_for_training(args.train_split)
+    
+    val_questions = collect_episodes._val_questions
+    
+    # Limit validation episodes if specified
+    if max_val_episodes is not None:
+        val_questions = val_questions[:max_val_episodes]
+    
+    print(f"Running validation on {len(val_questions)} questions (deterministic generation)")
+    
+    # Create validation output directory
+    val_output_dir = Path(args.episode_storage_dir) / "validation"
+    if update_idx is not None:
+        val_output_dir = val_output_dir / f"update_{update_idx + 1}"
+    else:
+        val_output_dir = val_output_dir / "final"
+    val_output_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Create simulator with deterministic generation
+    simulator_config = SimulatorConfig(
+        max_steps=2,
+        track_action_tokens=True,
+        do_sample=False,  # Deterministic for evaluation
+        temperature=1.0,
+        top_p=1.0,
+        top_k=50,
+        min_action_tokens=10,
+        max_action_tokens=100
+    )
+    
+    simulator = EpisodeSimulator(
+        model=policy_model,
+        processor=processor,
+        config=simulator_config,
+        device=args.device
+    )
+    
+    collector = EpisodeBatchCollector(
+        simulator=simulator,
+        output_dir=val_output_dir
+    )
+    
+    # Collect validation episodes
+    correct = 0
+    total = 0
+    
+    for val_idx, scene_data in enumerate(val_questions):
+        scene_id = str(scene_data["scene_id"])
+        question = scene_data["question"]
+        choices = scene_data["choices"]
+        ground_truth = str(scene_data["ground_truth"])
+        
+        # Find mesh
+        mesh_path = find_mesh_file(scene_id)
+        if mesh_path is None:
+            continue
+        
+        try:
+            mesh = o3d.io.read_triangle_mesh(str(mesh_path))
+            if mesh.is_empty():
+                continue
+        except Exception:
+            continue
+        
+        # Compute initial pose
+        vertices = np.asarray(mesh.vertices)
+        if len(vertices) == 0:
+            continue
+        
+        sky_direction = get_sky_direction_for_scene(scene_id)
+        up_vector = sky_direction_to_up_vector(sky_direction)
+        
+        center_x = (vertices[:, 0].min() + vertices[:, 0].max()) / 2.0
+        center_y = (vertices[:, 1].min() + vertices[:, 1].max()) / 2.0
+        z_min = vertices[:, 2].min()
+        cam_height_z = z_min + CAM_HEIGHT
+        eye = np.array([center_x, center_y, cam_height_z], dtype=float)
+        
+        forward = np.array([1.0, 0.0, 0.0], dtype=float)
+        initial_pose = look_at_camera_pose_center_from_forward(
+            eye, forward=forward, up=up_vector
+        )
+        
+        # Create environment
+        env = NavigationEnvironment(
+            mesh=mesh,
+            mesh_path=mesh_path,
+            scene_id=scene_id,
+            question=question,
+            choices=choices,
+            ground_truth=ground_truth,
+            max_steps=10,
+            output_dir=val_output_dir / f"val_{val_idx}_scene_{scene_id}"
+        )
+        
+        # Collect episode
+        try:
+            episode = collector.collect_episode(
+                env=env,
+                initial_pose=initial_pose,
+                episode_id=f"val_scene_{scene_id}",
+                verbose=False  # Less verbose for validation
+            )
+            
+            # Check correctness
+            if episode.final_answer is not None:
+                total += 1
+                if episode.final_answer == ground_truth:
+                    correct += 1
+                    print(f"  [{val_idx+1}/{len(val_questions)}] Scene {scene_id}: ✓ Correct ({episode.final_answer})")
+                else:
+                    print(f"  [{val_idx+1}/{len(val_questions)}] Scene {scene_id}: ✗ Wrong ({episode.final_answer} vs {ground_truth})")
+            else:
+                print(f"  [{val_idx+1}/{len(val_questions)}] Scene {scene_id}: No answer")
+                
+        except Exception as e:
+            print(f"  [{val_idx+1}/{len(val_questions)}] Scene {scene_id}: Error - {e}")
+    
+    # Compute accuracy
+    accuracy = correct / total if total > 0 else 0.0
+    
+    print(f"\nValidation Results:")
+    print(f"  Accuracy: {correct}/{total} = {accuracy:.1%}")
+    print("=" * 80)
+    
+    # Re-enable gradient checkpointing for training
+    if hasattr(policy_model, 'gradient_checkpointing_enable'):
+        policy_model.gradient_checkpointing_enable()
+    policy_model.train()
+    
+    return {
+        "val/accuracy": accuracy,
+        "val/correct": correct,
+        "val/total": total
+    }
 
 
 def create_dataloader(episodes, processor, args):
@@ -483,7 +661,18 @@ def train_online(args, policy_model, processor):
         if 'entropy/mean' in epoch_stats:
             print(f"  Mean entropy: {epoch_stats['entropy/mean']:.4f}")
         
-        # Step 5: Save checkpoint periodically
+        # Step 5: Run validation periodically
+        if (update_idx + 1) % 5 == 0 or (update_idx + 1) == args.num_updates:
+            print(f"\n[Validation] Running validation at update {update_idx + 1}")
+            val_metrics = validate(args, policy_model, processor, update_idx=update_idx, max_val_episodes=10)
+            
+            # Log validation metrics to wandb
+            if trainer.logger:
+                trainer.logger.log(val_metrics, step=trainer.global_step)
+            
+            print(f"  Validation accuracy: {val_metrics['val/accuracy']:.1%}")
+        
+        # Step 6: Save checkpoint periodically
         if (update_idx + 1) % 5 == 0:
             print(f"[Checkpoint] Saving at update {update_idx + 1}")
             trainer._save_training_checkpoint(is_epoch_end=True)
