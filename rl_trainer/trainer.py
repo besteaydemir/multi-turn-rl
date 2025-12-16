@@ -195,9 +195,12 @@ class RLTrainer:
         self.output_dir = Path(config.output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
         
-        # Save config
+        # Save config (convert non-serializable objects to strings)
+        config_dict = vars(config).copy()
+        if 'amp_dtype' in config_dict:
+            config_dict['amp_dtype'] = str(config_dict['amp_dtype'])
         with open(self.output_dir / "config.json", "w") as f:
-            json.dump(vars(config), f, indent=2)
+            json.dump(config_dict, f, indent=2)
         
         # Setup logging
         if config.use_wandb:
@@ -209,7 +212,9 @@ class RLTrainer:
                 tags=config.wandb_tags,
                 enabled=True
             )
-            self.logger.watch_model(self.model, log_freq=config.log_interval)
+            # DISABLED: watch_model causes massive slowdown during generation
+            # It hooks into EVERY forward pass (100+ times per generation)
+            # self.logger.watch_model(self.model, log_freq=config.log_interval)
         else:
             self.logger = None
         

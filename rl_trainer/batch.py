@@ -540,7 +540,10 @@ class EpisodeDataLoader:
             for i, ep in enumerate(self.episodes[:5]):  # Show first 5
                 print(f"  Episode {i}: {len(ep.turns)} turns, reward={ep.final_reward}")
                 if len(ep.turns) > 0:
-                    print(f"    Turn 0 has {len(ep.turns[0].action_tokens) if ep.turns[0].action_tokens else 0} action tokens")
+                    num_action_tokens = ep.turns[0].action_token_mask.sum().item() if ep.turns[0].action_token_mask is not None else 0
+                    print(f"    Turn 0 has {num_action_tokens} action tokens")
+                    if hasattr(ep.turns[0], 'action') and ep.turns[0].action:
+                        print(f"    Turn 0 action: forward={ep.turns[0].action.forward_meters}, done={ep.turns[0].action.done}")
         print("=" * 80)
 
 

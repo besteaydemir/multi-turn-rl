@@ -278,6 +278,9 @@ class EpisodeSimulator:
         """
         turn_start_time = time.time()
         
+        if verbose:
+            print(f"\n[Turn {turn_index + 1}] Starting...")
+        
         if output_dir:
             output_dir.mkdir(parents=True, exist_ok=True)
         
@@ -314,13 +317,18 @@ class EpisodeSimulator:
         # Parse action from generated text
         action, action_valid, action_error = self._parse_action(generated_text)
         
-        if verbose and action:
-            print(f"[Turn {turn_index}] Action: forward={action.forward_meters:.2f}m, "
-                  f"left={action.left_meters:.2f}m, rotation={action.rotation_angle_degrees:.1f}°, "
-                  f"done={action.done}")
+        # Calculate turn duration
+        turn_duration = time.time() - turn_start_time
+        
+        if verbose:
+            print(f"[Turn {turn_index + 1}] Completed in {turn_duration:.2f}s")
+            if action:
+                print(f"  Action: forward={action.forward_meters:.2f}m, "
+                      f"left={action.left_meters:.2f}m, rotation={action.rotation_angle_degrees:.1f}°, "
+                      f"done={action.done}")
             if json_start_idx is not None and json_end_idx is not None:
-                print(f"[Turn {turn_index}] JSON tokens: [{json_start_idx}, {json_end_idx})")
-            print(f"[Turn {turn_index}] Masking: {masking_diag['method']} (confidence: {masking_diag['confidence']:.2f})")
+                print(f"  JSON tokens: [{json_start_idx}, {json_end_idx})")
+            print(f"  Masking: {masking_diag['method']} (confidence: {masking_diag['confidence']:.2f})")
         
         # Build Turn object with masking diagnostics
         turn = Turn(

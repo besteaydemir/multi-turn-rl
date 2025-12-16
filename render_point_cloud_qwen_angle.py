@@ -25,7 +25,7 @@ from qwen_vl_utils import process_vision_info  # assumed available in your envir
 
 # ----------------- Config -----------------
 CACHE_DIR = "/dss/dssmcmlfs01/pn34sa/pn34sa-dss-0000/aydemir"
-MODEL_ID = "Qwen/Qwen3-VL-4B-Instruct"
+MODEL_ID = "Qwen/Qwen3-VL-8B-Instruct"
 MESH_BASE_DIR = "/dss/dssmcmlfs01/pn34sa/pn34sa-dss-0000/aydemir/raw"
 ARKIT_CSV_PATH = "/dss/dsshome1/06/di38riq/ARKitScenes/raw/raw_train_val_splits.csv"
 METADATA_CSV_PATH = "/dss/dssmcmlfs01/pn34sa/pn34sa-dss-0000/aydemir/raw/metadata.csv"

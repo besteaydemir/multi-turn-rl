@@ -17,6 +17,7 @@ from transformers import AutoProcessor, Qwen3VLForConditionalGeneration
 import argparse
 import open3d as o3d
 from datasets import load_dataset
+from datetime import datetime
 
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -39,7 +40,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Train VLM with policy gradient RL")
     
     # Model
-    parser.add_argument("--model_id", type=str, default="Qwen/Qwen3-VL-2B-Instruct",
+    parser.add_argument("--model_id", type=str, default="Qwen/Qwen3-VL-8B-Instruct",
                         help="Pretrained model ID")
     parser.add_argument("--cache_dir", type=str,
                         default="/dss/dssmcmlfs01/pn34sa/pn34sa-dss-0000/aydemir",
@@ -165,16 +166,41 @@ def load_vsi_bench_questions_for_training(train_split=0.8):
     return train_questions, val_questions
 
 
-def collect_episodes(args, policy_model, processor):
-    """Collect episodes using current policy from VSI-Bench filtered questions."""
+def collect_episodes(args, policy_model, processor, update_idx=None):
+    """Collect episodes using current policy from VSI-Bench filtered questions.
+    
+    Args:
+        args: Training arguments
+        policy_model: Current policy model
+        processor: Model processor
+        update_idx: Current update index for online RL (None for offline)
+    """
     
     # Disable gradient checkpointing during inference
     if hasattr(policy_model, 'gradient_checkpointing_disable'):
         policy_model.gradient_checkpointing_disable()
     policy_model.eval()  # Set to eval mode
     
+    # Create timestamped run directory if not exists
+    if not hasattr(collect_episodes, '_run_dir'):
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        collect_episodes._run_dir = Path(args.episode_storage_dir) / timestamp
+        collect_episodes._run_dir.mkdir(parents=True, exist_ok=True)
+        print(f"[Episodes] Created run directory: {collect_episodes._run_dir}")
+    
+    # Create update-specific subdirectory
+    if update_idx is not None:
+        episode_output_dir = collect_episodes._run_dir / f"update_{update_idx + 1}"
+    else:
+        episode_output_dir = collect_episodes._run_dir / "offline_training"
+    episode_output_dir.mkdir(parents=True, exist_ok=True)
+    
     print("\n" + "=" * 80)
-    print("COLLECTING EPISODES")
+    if update_idx is not None:
+        print(f"COLLECTING EPISODES - Update {update_idx + 1}")
+    else:
+        print("COLLECTING EPISODES")
+    print(f"Output dir: {episode_output_dir}")
     print("=" * 80)
     
     # Load VSI-Bench questions with same filtering as original pipeline
@@ -192,7 +218,7 @@ def collect_episodes(args, policy_model, processor):
     
     # Create simulator config
     simulator_config = SimulatorConfig(
-        max_steps=10,
+        max_steps=2,
         track_action_tokens=True,
         do_sample=True,
         temperature=1.0,
@@ -213,7 +239,7 @@ def collect_episodes(args, policy_model, processor):
     # Create batch collector
     collector = EpisodeBatchCollector(
         simulator=simulator,
-        output_dir=Path(args.episode_storage_dir)
+        output_dir=episode_output_dir
     )
     
     # Collect episodes
@@ -276,7 +302,7 @@ def collect_episodes(args, policy_model, processor):
                 choices=choices,
                 ground_truth=ground_truth,
                 max_steps=10,
-                output_dir=Path(args.episode_storage_dir) / f"scene_{scene_id}_ep_{ep_idx}"
+                output_dir=episode_output_dir / f"scene_{scene_id}_ep_{ep_idx}"
             )
             
             # Collect single episode
@@ -285,7 +311,7 @@ def collect_episodes(args, policy_model, processor):
                     env=env,
                     initial_pose=initial_pose,
                     episode_id=f"train_scene_{scene_id}_ep_{ep_idx}",
-                    verbose=False
+                    verbose=True  # Enable turn-by-turn output
                 )
                 all_episodes.append(episode)
                 print(f"  Episode {ep_idx+1}/{args.episodes_per_scene}: {'✓ Valid' if episode.is_valid else '✗ Invalid'}")
@@ -437,7 +463,7 @@ def train_online(args, policy_model, processor):
         
         # Step 1: Collect episodes with current policy
         print(f"[Update {update_idx + 1}] Collecting episodes with current policy...")
-        episodes = collect_episodes(args, policy_model, processor)
+        episodes = collect_episodes(args, policy_model, processor, update_idx=update_idx)
         
         # Step 2: Create fresh dataloader
         dataloader = create_dataloader(episodes, processor, args)
