@@ -4,7 +4,7 @@
 #SBATCH --ntasks=8
 #SBATCH --gres=gpu:1
 #SBATCH --mem=64G
-#SBATCH --time=04:30:00
+#SBATCH --time=06:30:00
 #SBATCH --qos=mcml
 #SBATCH --job-name=vsi_bench_continue
 #SBATCH --output=/dss/dsshome1/06/di38riq/rl_multi_turn/logs/vsi_bench_continue_%j.out

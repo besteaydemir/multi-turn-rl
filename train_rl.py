@@ -8,6 +8,7 @@ This script demonstrates the complete pipeline:
 3. Train with REINFORCE + LOO baseline + KL penalty + entropy
 4. Evaluate and save checkpoints
 """
+#  python train_rl.py --val_every_n_updates 1 --num_val_episodes 5 --batch_size 4 --gradient_accumulation_steps 1 --num_episodes 4 --online_rl --num_updates 2
 
 import sys
 import torch
@@ -77,10 +78,18 @@ def parse_args():
     parser.add_argument("--max_grad_norm", type=float, default=1.0,
                         help="Gradient clipping threshold")
     
+    # Validation
+    parser.add_argument("--val_every_n_updates", type=int, default=1,
+                        help="Run validation every N updates (default: 1 for every update)")
+    parser.add_argument("--num_val_episodes", type=int, default=10,
+                        help="Number of validation episodes to run (randomly sampled)")
+    
     # Output
-    parser.add_argument("--output_dir", type=str, default="./rl_checkpoints",
+    parser.add_argument("--output_dir", type=str, 
+                        default="/dss/dssmcmlfs01/pn34sa/pn34sa-dss-0000/aydemir/rl_checkpoints",
                         help="Output directory for checkpoints")
-    parser.add_argument("--episode_storage_dir", type=str, default="./rl_episodes",
+    parser.add_argument("--episode_storage_dir", type=str, 
+                        default="/dss/dssmcmlfs01/pn34sa/pn34sa-dss-0000/aydemir/rl_episodes",
                         help="Directory to store collected episodes")
     
     # Device
@@ -236,7 +245,7 @@ def collect_episodes(args, policy_model, processor, update_idx=None):
     
     # Create simulator config
     simulator_config = SimulatorConfig(
-        max_steps=2,
+        max_steps=3,
         track_action_tokens=True,
         do_sample=True,
         temperature=1.0,
@@ -393,9 +402,10 @@ def validate(args, policy_model, processor, update_idx=None, max_val_episodes=No
     
     val_questions = collect_episodes._val_questions
     
-    # Limit validation episodes if specified
-    if max_val_episodes is not None:
-        val_questions = val_questions[:max_val_episodes]
+    # Randomly sample validation episodes if specified (for faster validation)
+    if max_val_episodes is not None and len(val_questions) > max_val_episodes:
+        import random
+        val_questions = random.sample(val_questions, max_val_episodes)
     
     print(f"Running validation on {len(val_questions)} questions (deterministic generation)")
     
@@ -534,7 +544,7 @@ def create_dataloader(episodes, processor, args):
     
     dataloader = EpisodeDataLoader(
         episodes=episodes,
-        batch_size=args.batch_size,
+        batch_size=1,  # Process one episode at a time (no batching of turns)
         shuffle=True,
         filter_invalid=True,
         processor=processor,
@@ -603,14 +613,17 @@ def train_online(args, policy_model, processor):
     print("=" * 80)
     
     # Create trainer config (single update per batch)
+    # NOTE: batch_size is set to num_episodes for RLOO group size
+    # Each episode is processed one at a time (no turn batching)
+    # But RLOO baseline uses all num_episodes rewards
     config = TrainerConfig(
         learning_rate=args.learning_rate,
         max_grad_norm=args.max_grad_norm,
         kl_coef=args.kl_coef,
         entropy_coef=args.entropy_coef,
         num_epochs=1,  # Single pass through each batch
-        batch_size=args.batch_size,
-        gradient_accumulation_steps=args.gradient_accumulation_steps,
+        batch_size=args.num_episodes,  # RLOO group size = number of episodes
+        gradient_accumulation_steps=1,  # No gradient accumulation (process one episode at a time)
         output_dir=args.output_dir,
         device=args.device,
         use_amp=True,
@@ -619,7 +632,8 @@ def train_online(args, policy_model, processor):
         use_kl_scheduler=False,
         target_kl=0.01,
         kl_tolerance=0.005,
-        kl_adaptation_rate=1.5
+        kl_adaptation_rate=1.5,
+        log_interval=1  # Log every step for online RL (default is 10)
     )
     
     # Create trainer
@@ -630,7 +644,8 @@ def train_online(args, policy_model, processor):
     )
     
     print(f"Will perform {args.num_updates} policy updates")
-    print(f"Each update: collect {args.num_episodes} episodes → train on {args.batch_size} batch")
+    print(f"Each update: collect {args.num_episodes} episodes → train with RLOO group size {args.num_episodes}")
+    print(f"Note: Episodes processed one at a time (no turn batching), but RLOO uses all {args.num_episodes} rewards")
     print("=" * 80)
     
     # Online training loop
@@ -649,8 +664,11 @@ def train_online(args, policy_model, processor):
         
         # Step 3: Train on collected episodes (single epoch)
         print(f"[Update {update_idx + 1}] Training on collected episodes...")
+        print(f"[DEBUG] global_step before training: {trainer.global_step}")
         trainer.epoch = update_idx  # Track which update we're on
         epoch_metrics = trainer.train_epoch()
+        print(f"[DEBUG] global_step after training: {trainer.global_step}")
+        print(f"[DEBUG] Number of training steps in epoch: {len(epoch_metrics)}")
         
         # Step 4: Log update statistics
         epoch_stats = trainer._compute_epoch_stats(epoch_metrics)
@@ -662,13 +680,17 @@ def train_online(args, policy_model, processor):
             print(f"  Mean entropy: {epoch_stats['entropy/mean']:.4f}")
         
         # Step 5: Run validation periodically
-        if (update_idx + 1) % 5 == 0 or (update_idx + 1) == args.num_updates:
+        if (update_idx + 1) % args.val_every_n_updates == 0 or (update_idx + 1) == args.num_updates:
             print(f"\n[Validation] Running validation at update {update_idx + 1}")
-            val_metrics = validate(args, policy_model, processor, update_idx=update_idx, max_val_episodes=10)
+            val_metrics = validate(args, policy_model, processor, update_idx=update_idx, max_val_episodes=args.num_val_episodes)
             
-            # Log validation metrics to wandb
+            # Log validation metrics to wandb at CURRENT step
+            # Training metrics were already logged at this step during train_epoch
+            # We append validation metrics to the same step with commit=True to finalize
             if trainer.logger:
-                trainer.logger.log(val_metrics, step=trainer.global_step)
+                print(f"[DEBUG] Logging validation at step {trainer.global_step}")
+                # Use commit=True to ensure all metrics for this step are written
+                trainer.logger.log_training_step(trainer.global_step, val_metrics, commit=True)
             
             print(f"  Validation accuracy: {val_metrics['val/accuracy']:.1%}")
         

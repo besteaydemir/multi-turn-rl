@@ -263,10 +263,17 @@ class RLTrainer:
     
     def train_step(self, batch) -> Dict[str, float]:
         """
-        Single training step on a batch.
+        Single training step on a batch of episodes with episode-level RLOO.
+        
+        NEW BEHAVIOR:
+        - Computes episode-level RLOO baselines using N episode rewards
+        - Processes each episode individually (no turn batching)
+        - Aggregates logprobs across ALL turns within each episode
+        - Accumulates gradients across episodes
+        - Simplified: No KL penalty or entropy (can be added later)
         
         Args:
-            batch: EpisodeBatch
+            batch: EpisodeBatch with N episodes (each with potentially multiple turns)
             
         Returns:
             metrics: Dict of training metrics
@@ -274,27 +281,24 @@ class RLTrainer:
         # Ensure model is in training mode
         self.model.train()
         
+        N = batch.batch_size
+        
         # DEBUG: Check if batch has valid data (once per epoch)
         if self.global_step == 0 or (hasattr(self, '_last_debug_epoch') and self._last_debug_epoch != self.epoch):
-            print(f"\n[DEBUG] Epoch {self.epoch + 1} - First batch stats:")
-            print(f"  Batch size: {batch.batch_size}")
+            print(f"\n[DEBUG] Epoch {self.epoch + 1} - Batch stats:")
+            print(f"  Batch size (episodes): {N}")
             print(f"  Rewards shape: {batch.rewards.shape}")
             print(f"  Rewards: {batch.rewards.tolist()}")
-            print(f"  Context input_ids shape: {batch.context_input_ids.shape}")
-            print(f"  Generated_ids shape: {batch.generated_ids.shape}")
-            print(f"  Action masks shape: {batch.action_masks.shape}")
-            print(f"  Action masks sum: {batch.action_masks.sum(dim=1).tolist()}")
+            print(f"  Episodes turns: {[len(ep.turns) for ep in batch.episodes]}")
             self._last_debug_epoch = self.epoch
         
-        # Step 1: Compute LOO baseline
-        baselines = compute_loo_baseline(batch)
-        
-        # Step 2: Compute advantages (normalized)
+        # Step 1: Compute episode-level LOO baseline and advantages
+        baselines = compute_loo_baseline(batch)  # [N]
         advantages = compute_advantages(
             rewards=batch.rewards,
             baselines=baselines,
             normalize=True
-        )
+        )  # [N]
         
         # DEBUG: Check advantages (only first time)
         if self.global_step == 0:
@@ -302,51 +306,89 @@ class RLTrainer:
             print(f"  Advantages (before norm): {(batch.rewards - baselines).tolist()}")
             print(f"  Advantages (after norm): {advantages.tolist()}")
         
-        # Step 3: Compute sequence log-probs
-        with torch.amp.autocast('cuda', enabled=self.config.use_amp, dtype=self.config.amp_dtype):
-            logprobs_result = compute_sequence_logprobs(
-                model=self.model,
-                batch=batch,
-                ref_model=self.ref_model,
-                compute_entropy=True,
-                compute_kl=True,
-                device=self.config.device
-            )
-            
-            # Step 4: Compute loss with current KL coefficient
-            current_kl_coef = self.kl_scheduler.get_kl_coef() if self.kl_scheduler else self.config.kl_coef
-            
-            loss, metrics = policy_gradient_loss(
-                logprobs_result=logprobs_result,
-                advantages=advantages,
-                kl_coef=current_kl_coef,
-                entropy_coef=self.config.entropy_coef
-            )
-            
-            # DEBUG: Check loss components
-            if self.global_step == 0:
-                print(f"  LogProbs (logpi_seq): {logprobs_result.logpi_seq.tolist()}")
-                print(f"  Num action tokens: {logprobs_result.num_action_tokens.tolist()}")
-                print(f"  Mean logpi: {logprobs_result.mean_logpi.tolist()}")
-                pg_term = -(logprobs_result.logpi_seq * advantages)
-                print(f"  PG loss term (before mean): {pg_term.tolist()}")
-                print(f"  Loss components: PG={metrics['loss/policy_gradient']:.6f}, KL={metrics['loss/kl_penalty']:.6f}, Entropy={metrics['loss/entropy_bonus']:.6f}")
-                print(f"  Total loss: {loss.item():.6f}")
-            
-            # Scale loss for gradient accumulation
-            loss = loss / self.config.gradient_accumulation_steps
+        # Step 2: Process each episode and accumulate gradients
+        total_loss = 0.0
+        all_episode_logprobs = []
+        all_num_action_tokens = []
         
-        # Step 5: Backward pass
-        if self.scaler is not None:
-            self.scaler.scale(loss).backward()
-        else:
-            loss.backward()
+        for ep_idx, episode in enumerate(batch.episodes):
+            advantage_i = advantages[ep_idx]
+            
+            # Accumulate logprobs across all turns in this episode
+            episode_logprob_sum = 0.0
+            episode_num_action_tokens = 0
+            
+            for turn in episode.turns:
+                # Get turn data
+                context_ids = turn.context_input_ids.to(self.config.device)
+                generated_ids = turn.generated_ids.to(self.config.device)
+                action_mask = turn.action_token_mask.to(self.config.device)
+                
+                # Build full sequence: context + generated
+                full_ids = torch.cat([context_ids, generated_ids])
+                context_len = len(context_ids)
+                gen_len = len(generated_ids)
+                
+                # Forward pass with autocast
+                with torch.amp.autocast('cuda', enabled=self.config.use_amp, dtype=self.config.amp_dtype):
+                    outputs = self.model(
+                        input_ids=full_ids.unsqueeze(0),  # [1, seq_len]
+                        return_dict=True
+                    )
+                    logits = outputs.logits  # [1, seq_len, vocab_size]
+                    
+                    # Extract logits for generated tokens
+                    # Logits at position i predict token i+1, so we need logits[context_len-1:context_len+gen_len-1]
+                    gen_logits = logits[0, context_len-1:context_len+gen_len-1, :]  # [gen_len, vocab_size]
+                    
+                    # Compute log probs
+                    log_probs = torch.log_softmax(gen_logits, dim=-1)  # [gen_len, vocab_size]
+                    
+                    # Get logprobs for actual generated tokens
+                    token_logprobs = log_probs.gather(1, generated_ids.unsqueeze(-1)).squeeze(-1)  # [gen_len]
+                    
+                    # Mask to action tokens only
+                    action_logprobs = token_logprobs[action_mask]  # [num_action_tokens]
+                    
+                    # Accumulate
+                    episode_logprob_sum += action_logprobs.sum()
+                    episode_num_action_tokens += action_mask.sum().item()
+            
+            # Compute loss for this episode: -advantage * sum_of_logprobs
+            loss_i = -advantage_i * episode_logprob_sum
+            
+            # Backward (accumulates gradients)
+            # Scale by N to average loss across episodes
+            scaled_loss = loss_i / N
+            if self.scaler is not None:
+                self.scaler.scale(scaled_loss).backward()
+            else:
+                scaled_loss.backward()
+            
+            # Track metrics
+            total_loss += loss_i.item() / N
+            all_episode_logprobs.append(episode_logprob_sum.item())
+            all_num_action_tokens.append(episode_num_action_tokens)
         
-        # Add additional metrics
-        metrics["rewards/mean"] = batch.rewards.mean().item()
-        metrics["rewards/std"] = batch.rewards.std().item()
-        metrics["baselines/mean"] = baselines.mean().item()
-        metrics["lr"] = self.optimizer.param_groups[0]["lr"]
+        # DEBUG: Loss components (first time only)
+        if self.global_step == 0:
+            print(f"  Episode logprobs: {all_episode_logprobs}")
+            print(f"  Num action tokens per episode: {all_num_action_tokens}")
+            print(f"  Total loss: {total_loss:.6f}")
+        
+        # Aggregate metrics
+        metrics = {
+            "loss/total": total_loss,
+            "loss/policy_gradient": total_loss,  # All loss is PG loss (no KL/entropy for now)
+            "rewards/mean": batch.rewards.mean().item(),
+            "rewards/std": batch.rewards.std().item() if N > 1 else 0.0,
+            "advantages/mean": advantages.mean().item(),
+            "advantages/std": advantages.std().item() if N > 1 else 0.0,
+            "baselines/mean": baselines.mean().item(),
+            "logprobs/mean": sum(all_episode_logprobs) / N,
+            "action_tokens/mean": sum(all_num_action_tokens) / N,
+            "lr": self.optimizer.param_groups[0]["lr"]
+        }
         
         return metrics
     
@@ -391,80 +433,62 @@ class RLTrainer:
         """
         Train for one epoch.
         
+        NEW BEHAVIOR: Collects all episodes first, then trains on them as a group.
+        This enables episode-level RLOO with proper baseline computation.
+        
         Returns:
-            List of metrics for each step
+            List of metrics (single entry for the RLOO group)
         """
-        epoch_metrics = []
-        accumulated_metrics = {}
+        # Step 1: Collect all episodes from dataloader
+        all_episodes = []
+        print(f"[Epoch {self.epoch + 1}] Collecting episodes for RLOO group...")
+        for batch in self.dataloader:
+            # Dataloader yields batches of size 1 (one episode at a time)
+            all_episodes.extend(batch.episodes)
         
-        pbar = tqdm(self.dataloader, desc=f"Epoch {self.epoch + 1}/{self.config.num_epochs}")
+        print(f"[Epoch {self.epoch + 1}] Collected {len(all_episodes)} episodes")
+        print(f"  Turns per episode: {[len(ep.turns) for ep in all_episodes]}")
         
-        for step, batch in enumerate(pbar):
-            # Move batch to device
-            batch = batch.to(self.config.device)
-            
-            # Training step
-            metrics = self.train_step(batch)
-            
-            # Accumulate metrics
-            for key, value in metrics.items():
-                if key not in accumulated_metrics:
-                    accumulated_metrics[key] = []
-                accumulated_metrics[key].append(value)
-            
-            # Optimizer step (every N accumulation steps OR at end of epoch)
-            is_last_step = (step + 1) == len(self.dataloader)
-            should_update = ((step + 1) % self.config.gradient_accumulation_steps == 0) or is_last_step
-            
-            if should_update:
-                grad_norm = self.optimizer_step()
-                
-                # Average accumulated metrics
-                step_metrics = {
-                    key: sum(values) / len(values)
-                    for key, values in accumulated_metrics.items()
-                }
-                step_metrics["grad_norm"] = grad_norm
-                step_metrics["step"] = self.global_step
-                step_metrics["epoch"] = self.epoch
-                
-                # Update KL scheduler if enabled
-                if self.kl_scheduler is not None and "kl/mean" in step_metrics:
-                    current_kl = step_metrics["kl/mean"]
-                    new_kl_coef = self.kl_scheduler.step(current_kl, self.global_step)
-                    step_metrics["kl_coef"] = new_kl_coef
-                    
-                    # Add KL scheduler stats
-                    kl_stats = self.kl_scheduler.get_stats()
-                    step_metrics.update({f"kl_scheduler/{k}": v for k, v in kl_stats.items()})
-                
-                epoch_metrics.append(step_metrics)
-                accumulated_metrics = {}
-                
-                # Update progress bar
-                pbar.set_postfix({
-                    "loss": f"{step_metrics['loss/total']:.4f}",
-                    "reward": f"{step_metrics['rewards/mean']:.3f}",
-                    "lr": f"{step_metrics['lr']:.2e}"
-                })
-                
-                # Log metrics
-                if self.global_step % self.config.log_interval == 0:
-                    self._log_step_metrics(step_metrics, batch)
-                
-                # Save checkpoint (only if using step-based saving)
-                if self.config.save_every_n_epochs == 0:
-                    if should_save_checkpoint(
-                        step=self.global_step,
-                        save_interval=self.config.save_interval,
-                        last_save_time=self.last_save_time
-                    ):
-                        self._save_training_checkpoint()
-                        self.last_save_time = time.time()
-                
-                self.global_step += 1
+        # Step 2: Create mega-batch with all episodes for RLOO
+        from .batch import EpisodeBatch
+        mega_batch = EpisodeBatch(
+            episodes=all_episodes,
+            rewards=torch.tensor([ep.final_reward for ep in all_episodes], 
+                                dtype=torch.float32, device=self.config.device),
+            episode_ids=[ep.episode_id for ep in all_episodes],
+            device=self.config.device
+        )
         
-        return epoch_metrics
+        # Step 3: Single training step with all episodes
+        print(f"[Epoch {self.epoch + 1}] Training on RLOO group (N={len(all_episodes)})...")
+        metrics = self.train_step(mega_batch)
+        
+        # Step 4: Optimizer step
+        grad_norm = self.optimizer_step()
+        
+        # Step 5: Increment global_step BEFORE logging
+        self.global_step += 1
+        
+        # Add step info to metrics
+        metrics["grad_norm"] = grad_norm
+        metrics["step"] = self.global_step
+        metrics["epoch"] = self.epoch
+        
+        # Step 6: Log metrics
+        if self.global_step % self.config.log_interval == 0:
+            self._log_step_metrics(metrics, mega_batch)
+        
+        # Step 7: Save checkpoint (if using step-based saving)
+        if self.config.save_every_n_epochs == 0:
+            if should_save_checkpoint(
+                step=self.global_step,
+                save_interval=self.config.save_interval,
+                last_save_time=self.last_save_time
+            ):
+                self._save_training_checkpoint()
+                self.last_save_time = time.time()
+        
+        return [metrics]  # Return list with single entry
     
     def train(self):
         """
@@ -550,15 +574,16 @@ class RLTrainer:
         
         # Log to WandB
         if self.logger:
+            # Log training metrics (not committed yet)
             self.logger.log_training_step(self.global_step, metrics, commit=False)
             
-            # Log action histograms periodically
+            # Log action histograms periodically (also not committed)
             if self.global_step % (self.config.log_interval * 10) == 0:
                 episodes = batch.episodes if hasattr(batch, 'episodes') else []
                 if episodes:
                     self.logger.log_action_histograms(self.global_step, episodes, commit=False)
             
-            # Log example episodes periodically
+            # Log example episodes periodically (commits everything)
             if self.config.log_examples and self.global_step % (self.config.log_interval * 20) == 0:
                 episodes = batch.episodes if hasattr(batch, 'episodes') else []
                 if episodes:
@@ -569,8 +594,9 @@ class RLTrainer:
                         commit=True
                     )
             else:
-                # Commit the training step metrics
-                self.logger.log_training_step(self.global_step, {}, commit=True)
+                # Commit all pending logs (training metrics, histograms, etc)
+                import wandb
+                wandb.log({}, commit=True)
     
     def _save_training_checkpoint(
         self,

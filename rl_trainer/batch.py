@@ -33,102 +33,61 @@ class EpisodeBatch:
     """
     A batch of episodes prepared for RL training.
     
-    Context and generated sequences are stored separately and padded to their respective max lengths.
-    Supports Leave-One-Out (LOO) baseline computation.
+    IMPORTANT: This batch keeps multi-turn episodes together!
+    - Each episode can have multiple turns (1-N turns)
+    - RLOO baseline is computed at EPISODE level (using episode rewards)
+    - Loss is computed by aggregating logprobs across ALL turns in each episode
     
-    Shapes:
-        batch_size: N episodes
-        max_context_len: Maximum context length across all episodes
-        max_gen_len: Maximum generation length across all episodes
+    Structure:
+        episodes: List of Episode objects (length = batch_size)
+        rewards: Tensor of episode-level rewards [batch_size]
         
-    Note: For LOO baseline, N >= 2 is required. N >= 8 recommended for stability.
+    For episode i with T_i turns:
+        - All T_i turns contribute to the same loss term
+        - Loss_i = -advantage_i * sum_{t=1}^{T_i} sum_{action_tokens} logprob_t
+        
+    Note: For LOO baseline, batch_size >= 2 required. Batch size of 4-8 recommended.
     """
     
-    # Core tensors
-    context_input_ids: torch.Tensor      # Shape: [batch_size, max_context_len]
-    generated_ids: torch.Tensor          # Shape: [batch_size, max_gen_len]
-    action_masks: torch.Tensor           # Shape: [batch_size, max_gen_len] - masks for action tokens
-    attention_masks: torch.Tensor        # Shape: [batch_size, max_context_len + max_gen_len]
+    # Episodes (kept as structured objects)
+    episodes: List[Episode]              # List of Episode objects
     
-    # Metadata (shape: [batch_size])
-    rewards: torch.Tensor                # Scalar rewards per episode
-    context_lengths: torch.Tensor        # Length of context (index C)
-    generation_lengths: torch.Tensor     # Length of generated sequence
+    # Episode-level metadata
+    rewards: torch.Tensor                # Shape: [batch_size] - episode rewards
     episode_ids: List[str]               # Episode identifiers
     
     # Additional info
     batch_size: int = field(init=False)
-    max_context_len: int = field(init=False)
-    max_gen_len: int = field(init=False)
-    max_len: int = field(init=False)  # max_context_len + max_gen_len
     device: str = "cpu"
     
     def __post_init__(self):
+        """Initialize batch size and validate structure."""
         self.batch_size = len(self.rewards)
-        self.max_context_len = self.context_input_ids.shape[1]
-        self.max_gen_len = self.generated_ids.shape[1]
-        self.max_len = self.max_context_len + self.max_gen_len
         
         # Validate shapes
-        assert self.context_input_ids.shape == (self.batch_size, self.max_context_len)
-        assert self.generated_ids.shape == (self.batch_size, self.max_gen_len)
-        assert self.action_masks.shape == (self.batch_size, self.max_gen_len)
-        assert self.attention_masks.shape == (self.batch_size, self.max_len)
-        assert len(self.rewards) == self.batch_size
-        assert len(self.context_lengths) == self.batch_size
-        assert len(self.generation_lengths) == self.batch_size
-        assert len(self.episode_ids) == self.batch_size
+        assert len(self.episodes) == self.batch_size, f"Mismatch: {len(self.episodes)} episodes vs {self.batch_size} rewards"
+        assert len(self.episode_ids) == self.batch_size, f"Mismatch: {len(self.episode_ids)} IDs vs {self.batch_size} rewards"
     
     def to(self, device: str) -> 'EpisodeBatch':
         """Move all tensors to specified device."""
         return EpisodeBatch(
-            context_input_ids=self.context_input_ids.to(device),
-            generated_ids=self.generated_ids.to(device),
-            action_masks=self.action_masks.to(device),
-            attention_masks=self.attention_masks.to(device),
+            episodes=self.episodes,  # Episode objects don't need device movement
             rewards=self.rewards.to(device),
-            context_lengths=self.context_lengths.to(device),
-            generation_lengths=self.generation_lengths.to(device),
             episode_ids=self.episode_ids,
             device=device
         )
     
     def __len__(self) -> int:
-        """Return the batch size."""
+        """Return the batch size (number of episodes)."""
         return self.batch_size
     
-    def get_full_input_ids(self, idx: int) -> torch.Tensor:
-        """
-        Get full input sequence for episode idx: context + generated.
-        
-        Returns:
-            Tensor of shape [total_len] containing concatenated sequence.
-        """
-        context_len = self.context_lengths[idx].item()
-        gen_len = self.generation_lengths[idx].item()
-        
-        # Extract valid tokens (no padding)
-        context = self.context_input_ids[idx, :context_len]
-        generated = self.generated_ids[idx, :gen_len]
-        
-        return torch.cat([context, generated], dim=0)
+    def get_num_turns(self, idx: int) -> int:
+        """Get number of turns in episode idx."""
+        return len(self.episodes[idx].turns)
     
-    def get_action_token_indices(self, idx: int) -> torch.Tensor:
-        """
-        Get indices of action tokens for episode idx (relative to full sequence).
-        
-        Returns:
-            Tensor of indices where action_mask is True.
-        """
-        gen_len = self.generation_lengths[idx].item()
-        action_mask = self.action_masks[idx, :gen_len]
-        
-        # Get indices (relative to generated sequence)
-        action_indices = torch.where(action_mask)[0]
-        
-        # Offset by context length to get absolute indices
-        context_len = self.context_lengths[idx].item()
-        return action_indices + context_len
+    def get_episode(self, idx: int) -> Episode:
+        """Get episode by index."""
+        return self.episodes[idx]
 
 
 def prepare_batch(
@@ -140,148 +99,35 @@ def prepare_batch(
     """
     Prepare a batch of episodes for training.
     
-    Steps:
-    1. Extract context_input_ids and generated_ids from each episode
-    2. Concatenate all turns in multi-turn episodes
-    3. Pad to max_len
-    4. Create attention masks
-    5. Align action masks
+    NEW BEHAVIOR: Keeps episodes as structured objects instead of unpacking turns!
+    - Each episode retains its multi-turn structure
+    - RLOO baseline computed at episode level
+    - Loss aggregates across all turns within each episode
     
     Args:
         episodes: List of Episode objects (N >= 1)
-        processor: Qwen processor (for tokenization if needed)
-        pad_token_id: Token ID for padding (default: processor.tokenizer.pad_token_id)
+        processor: Not used in new implementation (kept for compatibility)
+        pad_token_id: Not used in new implementation (kept for compatibility)
         device: Device to place tensors on
         
     Returns:
-        EpisodeBatch ready for training
+        EpisodeBatch with episodes kept as structured objects
         
     Note: For LOO baseline, ensure len(episodes) >= 2
     """
-    if pad_token_id is None:
-        if processor is None:
-            raise ValueError("Either processor or pad_token_id must be provided")
-        pad_token_id = processor.tokenizer.pad_token_id
-        if pad_token_id is None:
-            pad_token_id = processor.tokenizer.eos_token_id
-    
     batch_size = len(episodes)
     
-    # Collect data from all episodes
-    all_context_ids = []
-    all_generated_ids = []
-    all_action_masks = []
-    all_rewards = []
-    all_episode_ids = []
-    context_lengths = []
-    generation_lengths = []
+    # Extract episode-level rewards
+    rewards = torch.tensor([ep.final_reward for ep in episodes], dtype=torch.float32, device=device)
+    episode_ids = [ep.episode_id for ep in episodes]
     
-    for episode in episodes:
-        # For multi-turn episodes, concatenate all turns
-        # Context = initial prompt + all previous turn outputs
-        # Generated = current turn output (we train on all turns)
-        
-        # Get the full conversation for this episode
-        # For simplicity in Step 4, we'll process each turn as a separate training example
-        # In practice, you might want to train on entire multi-turn sequences
-        
-        for turn in episode.turns:
-            # Context: everything before this turn's generation
-            context_ids = turn.context_input_ids
-            
-            # Generated: tokens produced in this turn
-            generated_ids = turn.generated_ids
-            
-            # Action mask: marks action tokens within generated sequence
-            action_mask = turn.action_token_mask
-            
-            # Store
-            all_context_ids.append(context_ids)
-            all_generated_ids.append(generated_ids)
-            all_action_masks.append(action_mask)
-            all_rewards.append(episode.final_reward)  # All turns get same episode reward
-            all_episode_ids.append(f"{episode.episode_id}_turn{turn.turn_index}")
-            
-            context_lengths.append(len(context_ids))
-            generation_lengths.append(len(generated_ids))
-    
-    # Find max length for padding
-    max_context_len = max(len(ids) for ids in all_context_ids)
-    max_gen_len = max(len(ids) for ids in all_generated_ids)
-    max_len = max_context_len + max_gen_len
-    
-    # Pad all sequences
-    padded_contexts = []
-    padded_generated = []
-    padded_action_masks = []
-    attention_masks = []
-    
-    for context_ids, gen_ids, action_mask in zip(all_context_ids, all_generated_ids, all_action_masks):
-        context_len = len(context_ids)
-        gen_len = len(gen_ids)
-        
-        # Get device from existing tensors
-        device = context_ids.device
-        
-        # Ensure all tensors are on the same device
-        gen_ids = gen_ids.to(device)
-        action_mask = action_mask.to(device)
-        
-        # Pad context to max_context_len
-        context_padding = max_context_len - context_len
-        padded_context = torch.cat([
-            context_ids,
-            torch.full((context_padding,), pad_token_id, dtype=torch.long, device=device)
-        ])
-        
-        # Pad generated to max_gen_len
-        gen_padding = max_gen_len - gen_len
-        padded_gen = torch.cat([
-            gen_ids,
-            torch.full((gen_padding,), pad_token_id, dtype=torch.long, device=device)
-        ])
-        
-        # Pad action mask to max_gen_len
-        mask_padding = max_gen_len - len(action_mask)
-        padded_mask = torch.cat([
-            action_mask,
-            torch.zeros(mask_padding, dtype=torch.bool, device=device)
-        ])
-        
-        # Attention mask (1 for real tokens, 0 for padding)
-        # Shape: [max_len] = [max_context_len + max_gen_len]
-        attention_mask = torch.zeros(max_len, dtype=torch.long, device=device)
-        attention_mask[:context_len] = 1  # Real context tokens
-        attention_mask[max_context_len:max_context_len + gen_len] = 1  # Real generated tokens
-        
-        padded_contexts.append(padded_context)
-        padded_generated.append(padded_gen)
-        padded_action_masks.append(padded_mask)
-        attention_masks.append(attention_mask)
-    
-    # Stack into tensors
-    context_input_ids = torch.stack(padded_contexts)
-    generated_ids = torch.stack(padded_generated)
-    action_masks = torch.stack(padded_action_masks)
-    attention_masks = torch.stack(attention_masks)
-    rewards = torch.tensor(all_rewards, dtype=torch.float32)
-    context_lengths = torch.tensor(context_lengths, dtype=torch.long)
-    generation_lengths = torch.tensor(generation_lengths, dtype=torch.long)
-    
-    # Create batch
-    batch = EpisodeBatch(
-        context_input_ids=context_input_ids,
-        generated_ids=generated_ids,
-        action_masks=action_masks,
-        attention_masks=attention_masks,
+    # Return batch with episodes as structured objects
+    return EpisodeBatch(
+        episodes=episodes,
         rewards=rewards,
-        context_lengths=context_lengths,
-        generation_lengths=generation_lengths,
-        episode_ids=all_episode_ids,
+        episode_ids=episode_ids,
         device=device
     )
-    
-    return batch.to(device)
 
 
 def prepare_loo_batches(
