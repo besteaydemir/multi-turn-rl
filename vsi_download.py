@@ -12,7 +12,6 @@ print(f"ℹ️ VSI-Bench table rows: {len(vsi)}")
 
 filtered = vsi.filter(
     lambda x: x["dataset"] == "arkitscenes"
-              and x["question_type"] == "route_planning"
 )
 
 print(f"🔎 Filtered rows: {len(filtered)}\n")
@@ -73,7 +72,7 @@ for scene_id in vsi_scene_ids:
 
 output_df = pd.DataFrame(output_rows)
 
-output_csv_path = "my_filtered_raw.csv"
+output_csv_path = "my_filtered_raw_all.csv"
 output_df.to_csv(output_csv_path, index=False)
 
 print("=======================================")
@@ -90,11 +89,11 @@ print(
     "--download_laser_scanner_point_cloud\n"
 )
 
-
-# python3 download_data.py raw \
-# --video_id_csv my_filtered_raw.csv \
-# --download_dir /tmp/arkit_faro \
-# --raw_dataset_assets mesh
+#/dss/mcmlscratch/06/di38riq/arkit_vsi
+python3 download_data.py raw \
+--video_id_csv my_filtered_raw_all.csv \
+--download_dir /dss/mcmlscratch/06/di38riq/arkit_vsi \
+--raw_dataset_assets mesh
 
 # Works
 # python3 download_data.py raw --split Validation --video_id 41069043 \

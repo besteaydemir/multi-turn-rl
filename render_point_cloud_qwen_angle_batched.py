@@ -40,6 +40,8 @@ DEFAULT_FX_FY = 300.0   # wider FOV
 CAM_HEIGHT = 1.6        # meters above floor (heuristic)
 MAX_ATTEMPTS_PER_STEP = 1  # Single attempt per step for speed
 COND_THRESHOLD = 1e12   # threshold for condition number marking near-singular
+MAX_BATCHED_TURNS = 4  # Number of turns to process in batch mode across questions
+BATCH_SIZE = 2  # Number of questions to process in parallel at once (limit for GPU memory)
 
 # Initial view selection configuration
 INITIAL_VIEW_SELECTION_METRIC = "visibility"  # "visibility" or "laplacian"
@@ -292,6 +294,12 @@ model = Qwen3VLForConditionalGeneration.from_pretrained(
     MODEL_ID, dtype="auto", device_map="auto", cache_dir=CACHE_DIR
 )
 processor = AutoProcessor.from_pretrained(MODEL_ID, cache_dir=CACHE_DIR)
+
+# CRITICAL: Set padding_side='left' for decoder-only models in batch inference
+# Right-padding causes empty outputs because model generates from padding tokens!
+processor.tokenizer.padding_side = 'left'
+print(f"[INFO] Tokenizer padding side set to: {processor.tokenizer.padding_side}")
+
 model.to(device)
 print("[INFO] Qwen3 model loaded.")
 
@@ -371,10 +379,10 @@ def build_inputs_with_cached_vision(text_prompt, image_paths, cached_vision_embe
     return inputs
 
 # --------------- Qwen interaction and parsing --------------
-def build_instruction_text(R, t, question, bbox=None, options=None, is_final_step=False, movement_history=None, step_num=0):
+def build_instruction_text(R, t, question, bbox=None, options=None, is_final_step=False, movement_history=None, step_num=0, question_type="unknown"):
     R_rounded = np.round(R, 2).tolist()
     t_rounded = np.round(t, 2).tolist()
-    instr = build_instruction_natural(R_rounded, t_rounded, question, bbox=bbox, options=options, is_final_step=is_final_step, step_num=step_num)
+    instr = build_instruction_natural(R_rounded, t_rounded, question, bbox=bbox, options=options, is_final_step=is_final_step, step_num=step_num, question_type=question_type)
 
     # Add movement history to the instruction with clear numbering
     movement_history_text = ""
@@ -405,7 +413,8 @@ def find_mesh_file(scene_id, mesh_base_dir=MESH_BASE_DIR):
     return None
 
 
-def build_instruction_natural(R_rounded, t_rounded, question, bbox=None, options=None, is_final_step=False, step_num=0):
+def build_instruction_natural(R_rounded, t_rounded, question, bbox=None, options=None, is_final_step=False, step_num=0, question_type="unknown"):
+    # Format bounding box with reasoning context
     bbox_text = ""
     if bbox is not None:
         try:
@@ -414,10 +423,11 @@ def build_instruction_natural(R_rounded, t_rounded, question, bbox=None, options
             mins_2sf = [float(f"{x:.2g}") for x in mins]
             maxs_2sf = [float(f"{x:.2g}") for x in maxs]
             bbox_text = (
-                "Scene bounding box limits (meters):\n"
+                "**Scene bounding box limits (meters):**\n"
                 f"  x: [{mins_2sf[0]}, {maxs_2sf[0]}]\n"
                 f"  y: [{mins_2sf[1]}, {maxs_2sf[1]}]\n"
                 f"  z: [{mins_2sf[2]}, {maxs_2sf[2]}]\n\n"
+                "⚠️  **IMPORTANT:** The room is NOT a perfect rectangle. Stay within these boundaries - if you see mostly white/empty areas in the render, you are at the edge of the valid room space. Move back toward areas with visible objects and textures.\n"
             )
         except Exception:
             bbox_text = ""
@@ -437,90 +447,100 @@ def build_instruction_natural(R_rounded, t_rounded, question, bbox=None, options
     # Conditional instruction text based on whether this is the final step
     if is_final_step:
         movement_instruction = """
-4. **THIS IS YOUR FINAL STEP:** You have now explored the scene thoroughly. You MUST provide your final answer choice (A, B, C, or D).
-   - Prioritize outputting your best answer.
-   - You may provide minimal camera movement (e.g., small adjustments) or zero movement.
-   - The critical requirement is that you output your final answer in the JSON response.
-   - Set "done": true ONLY when you are providing a final answer.
+**THIS IS YOUR FINAL STEP:** You have explored the scene. You MUST provide your final answer choice (A, B, C, or D).
+- Prioritize outputting your best answer.
+- You may provide minimal camera movement or zero movement.
+- The critical requirement is that you output your final answer in the JSON response.
+- Set "done": true ONLY when you are providing a final answer.
 """
         important_note = "IMPORTANT: This is your final opportunity to answer. You MUST output your best answer choice (A/B/C/D) in the JSON and set done=true."
     else:
         movement_instruction = """
-4. **Do NOT stay in the same location.** Always provide at least one non-zero movement.
+**Movement Guidelines:**
 
-5. **Answering too early is a mistake.** ONLY output an answer (A, B, C, or D) when you have thoroughly explored the scene and are CERTAIN of your answer. 
+1. **Do NOT stay in the same location.** Always provide at least one non-zero movement.
+
+2. **AVOID REPETITIVE MOVEMENTS!** Look at your action history - do NOT keep rotating back and forth (e.g., turn right 30°, then left 30°, then right 30°). This wastes steps without discovering new information.
+   - If you've been oscillating between views, commit to a direction and move forward significantly.
+   - Explore NEW areas you haven't seen yet - don't just look at the same spot from slightly different angles.
+   - Think strategically: What haven't you seen? What information is missing?
+
+3. **Use the bounding box information above to reason about your position and plan movements.** Consider where you are relative to the room boundaries and where unexplored areas might be.
+
+4. **Answering too early is a mistake.** ONLY output an answer (A, B, C, or D) when you have thoroughly explored the scene and are CERTAIN of your answer.
    - Most of the time, you should NOT provide an answer yet - just explore and set "done": false.
    - Only when you are completely confident should you set both "answer": "X" AND "done": true together.
    - Never output an answer while still exploring (done=false). Either explore (no answer) OR finalize (answer + done=true).
 
-6. **When you are confident:** If you have seen enough viewpoints and are absolutely certain of your answer, set "done": true AND provide your answer.
+5. **When you are confident:** If you have seen enough viewpoints and are absolutely certain of your answer, set "done": true AND provide your answer.
 """
-        important_note = "IMPORTANT: Keep exploring and DO NOT output an answer unless you are ready to stop (done=true). Answer and done=true should come together, not separately."
+        important_note = "IMPORTANT: Keep exploring meaningfully (avoid repetitive oscillations) and DO NOT output an answer unless you are ready to stop (done=true). Answer and done=true should come together, not separately."
 
-    # Preprocess question text (already done if coming from train_rl.py, but ensure consistency)
-    # This is already handled by the question text passed in, but keep the replacement for standalone usage
+    # Preprocess question text
     if "You are a robot beginning at" in question:
         question = question.replace("You are a robot beginning at", "If you begin navigating at")
 
-    # Add a note for Qwen to find the starting place first
-    starting_place_note = "\n**Note:** Your first task is to identify the starting place mentioned in the question.\n"
+    # Add a note - different for route planning vs other question types
+    if question_type == "route_planning":
+        starting_place_note = "\n**Note:** Your first task is to identify the starting place mentioned in the question and understand the route.\n"
+    else:
+        starting_place_note = "\n**Note:** Your first task is to locate and identify the items/objects mentioned in the question.\n"
 
-    instr = f"""
-            You are given rendered views of a 3D room scene. You control the camera by specifying how to move it. 
-            Your goal is to find the answer to the question below by exploring the scene with camera movements.
+    instr = f"""You are in the process of exploring a 3D room scene to answer a navigation question. You control the camera by specifying movements. Below you will see all the images you have rendered so far, followed by the actions you selected to obtain each image.
 
-            {bbox_text}
+# Current camera position: {t_rounded} (x, y, z in meters)
+# This is exploration step {step_num}
 
-            # Current camera position: {t_rounded} (x, y, z in meters)
-            # This is exploration step {step_num}
+{bbox_text}
+---
 
-            Question: {question}
-            {options_text}
+Question: {question}
+{options_text}
+{starting_place_note}
+{important_note}
 
-            {starting_place_note}
-            {important_note}
+---
+**DETAILED REASONING INSTRUCTIONS:**
 
-            ---
-            DETAILED REASONING INSTRUCTIONS:
+1. **Analyze the current view thoroughly:**
+   - What objects and areas are visible?
+   - What areas are hidden or blocked from the current viewpoint?
+   - What would you need to see to better answer the question?
+   - Use the bounding box information to reason about your position in the room.
 
-            1. **Analyze the current view thoroughly:**
-            - What objects and areas are visible?
-            - What areas are hidden or blocked from the current viewpoint?
-            - What would you need to see to better answer the question?
+2. **Plan your camera movement:**
+   - Decide how much to move forward/backward (toward/away from what you're looking at)
+   - Decide how much to move left/right (perpendicular to where you're looking)
+   - Think about what rotation (turning left/right) might help
+   - Write out your reasoning in plain English before giving the JSON.
 
-            2. **Plan your camera movement:**
-            - Decide how much to move forward/backward (toward/away from what you're looking at)
-            - Decide how much to move left/right (perpendicular to where you're looking)
-            - Think about what rotation (turning left/right) might help
-            - Write out your reasoning in plain English before giving the JSON.
+3. **Specify the movement:**
+   - `rotation_angle_degrees`: positive = turn left, negative = turn right (e.g., 15, -30, 90)
+   - `forward_meters`: positive = move forward (in the direction you're facing), negative = move backward. Range: -0.5 to +0.5 meters
+   - `left_meters`: positive = strafe left, negative = strafe right. Range: -0.5 to +0.5 meters
+   - `z_delta_meters`: move up (+) or down (-) to change height. Range: -0.3 to +0.3 meters
 
-            3. **Specify the movement:**
-            - `rotation_angle_degrees`: positive = turn left, negative = turn right (e.g., 15, -30, 90)
-            - `forward_meters`: positive = move forward (in the direction you're facing), negative = move backward. Range: -0.5 to +0.5 meters
-            - `left_meters`: positive = strafe left, negative = strafe right. Range: -0.5 to +0.5 meters
-            - `z_delta_meters`: move up (+) or down (-) to change height. Range: -0.3 to +0.3 meters
+{movement_instruction}
 
-            {movement_instruction}
+---
+**OUTPUT FORMAT:**
 
-            ---
-            FORMAT:
+First, write your detailed reasoning (3-4 sentences explaining what you see, how you're using the bounding box information, and why you're moving the camera, or why you're ready to finalize your answer).
 
-            First, write your detailed reasoning (3-4 sentences explaining what you see and why you're moving the camera, or why you're ready to finalize your answer).
+Then end with a JSON object:
+{{
+  "rotation_angle_degrees": <number, e.g., 15 or -30>,
+  "forward_meters": <number between -0.5 and 0.5>,
+  "left_meters": <number between -0.5 and 0.5>,
+  "z_delta_meters": <number between -0.3 and 0.3>,
+  "answer": "your final answer choice (A, B, C, or D) ONLY if done=true, otherwise null",
+  "done": true or false
+}}
 
-            Then end with a JSON object:
-            {{
-            "rotation_angle_degrees": <number, e.g., 15 or -30>,
-            "forward_meters": <number between -0.5 and 0.5>,
-            "left_meters": <number between -0.5 and 0.5>,
-            "z_delta_meters": <number between -0.3 and 0.3>,
-            "answer": "your final answer choice (A, B, C, or D) ONLY if done=true, otherwise null",
-            "done": true or false
-            }}
-
-            CRITICAL: "answer" and "done" should be consistent:
-            - If done=false: answer MUST be null (you are still exploring)
-            - If done=true: answer MUST be A, B, C, or D (you have decided to finalize)
-            """
+CRITICAL: "answer" and "done" should be consistent:
+- If done=false: answer MUST be null (you are still exploring)
+- If done=true: answer MUST be A, B, C, or D (you have decided to finalize)
+"""
     return instr
 
 
@@ -692,6 +712,490 @@ def parse_qwen_output_and_get_movement(output_text):
 
     return rotation_angle, forward_m, left_m, z_delta_m, reasoning, obj, done
 
+# ============================================================================
+# BATCH INFERENCE SUPPORT - QuestionState class and helper functions
+# ============================================================================
+
+class QuestionState:
+    """Maintains state for a single question during multi-turn reasoning."""
+    def __init__(self, mesh_path, question, choices, question_id, experiment_base_dir, scene_id, question_type="unknown"):
+        self.mesh_path = mesh_path
+        self.question = question
+        self.choices = choices
+        self.question_id = question_id
+        self.experiment_base_dir = experiment_base_dir
+        self.scene_id = scene_id
+        self.question_type = question_type
+        
+        # Output directory
+        self.base_out = Path(experiment_base_dir) / f"q{question_id:03d}"
+        self.base_out.mkdir(parents=True, exist_ok=True)
+        
+        # Mesh and bounding box
+        self.mesh = None
+        self.bbox_mins = None
+        self.bbox_maxs = None
+        
+        # Camera history
+        self.image_history = []
+        self.cam_history = []
+        self.R_current = None
+        self.t_current = None
+        
+        # Position history for context
+        self.position_history = []
+        
+        # Vision embedding cache
+        self.vision_embed_cache = {}
+        
+        # Tracking
+        self.actual_steps = 0
+        self.start_time = time.time()
+        self.elapsed_time = 0
+        self.final_answer = None
+        self.batch_time_accumulated = 0.0  # Track time from batched inference
+        self.sequential_time = 0.0  # Track time from sequential inference
+
+def initialize_question_state(mesh_path, question, choices, question_id, experiment_base_dir, scene_id, question_type="unknown"):
+    """Initialize a QuestionState by loading mesh and rendering initial view."""
+    state = QuestionState(mesh_path, question, choices, question_id, experiment_base_dir, scene_id, question_type)
+    
+    # Load mesh
+    print(f"[Q{question_id:03d}] 📂 Loading mesh: {mesh_path}")
+    state.mesh = o3d.io.read_triangle_mesh(str(mesh_path))
+    if state.mesh.is_empty():
+        raise RuntimeError(f"Loaded mesh is empty for Q{question_id}")
+    
+    # Compute bounding box
+    vertices = np.asarray(state.mesh.vertices)
+    state.bbox_mins = vertices.min(axis=0).tolist()
+    state.bbox_maxs = vertices.max(axis=0).tolist()
+    
+    # Generate and select best initial view
+    center_x = (vertices[:, 0].min() + vertices[:, 0].max()) / 2.0
+    center_y = (vertices[:, 1].min() + vertices[:, 1].max()) / 2.0
+    z_min, z_max = vertices[:, 2].min(), vertices[:, 2].max()
+    cam_height_z = z_min + CAM_HEIGHT
+    eye = np.array([center_x, center_y, cam_height_z], dtype=float)
+    
+    view_images = {}
+    view_poses = {}
+    view_angles = [0, 90, 180, 270]
+    
+    for angle_deg in view_angles:
+        angle_rad = np.deg2rad(angle_deg)
+        forward = np.array([np.cos(angle_rad), np.sin(angle_rad), 0.0], dtype=float)
+        pose = look_at_camera_pose_center_from_forward(eye, forward=forward, up=np.array([0.0, 0.0, -1.0]))
+        view_poses[angle_deg] = pose
+        
+        img_path = state.base_out / f"render_candidate_{angle_deg}.png"
+        render_mesh_from_pose(state.mesh, pose, img_path, fxfy=DEFAULT_FX_FY)
+        
+        img_pil = Image.open(img_path)
+        img_array = np.array(img_pil).astype(float) / 255.0
+        view_images[angle_deg] = img_array
+    
+    best_angle, best_score, all_scores = select_best_initial_view(view_images, metric=INITIAL_VIEW_SELECTION_METRIC)
+    
+    # Save selection info
+    scores_record = {
+        "metric": INITIAL_VIEW_SELECTION_METRIC,
+        "all_scores": {str(k): float(v) for k, v in all_scores.items()},
+        "best_angle": best_angle,
+        "best_score": float(best_score)
+    }
+    with open(state.base_out / "initial_view_selection.json", "w") as f:
+        json.dump(scores_record, f, indent=2)
+    
+    # Set initial camera pose
+    cam_pose = view_poses[best_angle]
+    save_matrix(state.base_out / "cam_pose_00.npy", cam_pose)
+    img0 = state.base_out / "render_00.png"
+    Image.fromarray((view_images[best_angle] * 255).astype(np.uint8)).save(str(img0))
+    
+    state.image_history = [str(img0)]
+    state.cam_history = [cam_pose.copy()]
+    state.R_current = cam_pose[:3, :3]
+    state.t_current = cam_pose[:3, 3]
+    
+    print(f"[Q{question_id:03d}] ✅ Initialized (best view: {best_angle}°)")
+    
+    return state
+
+def run_batched_turn(active_questions, turn):
+    """
+    Run a single turn for multiple questions in batch.
+    
+    Args:
+        active_questions: List of question_state dicts that are still active
+        turn: Current turn number
+    
+    Returns:
+        List of result dicts with keys: done, final_answer
+    """
+    print(f"[INFO] 🔄 Preparing batch inference for turn {turn} ({len(active_questions)} questions)")
+    
+    # Prepare batch messages
+    batch_messages = []
+    batch_states = []
+    
+    for qs in active_questions:
+        state = qs["state"]
+        is_final_step = False  # We don't force final step in batched phase
+        
+        # Build base instruction (without history)
+        instruction_text = build_instruction_text(
+            state.R_current, state.t_current, state.question,
+            bbox=(state.bbox_mins, state.bbox_maxs),
+            options=state.choices,
+            is_final_step=is_final_step,
+            movement_history=None,  # We'll add this separately
+            step_num=turn,
+            question_type=state.question_type
+        )
+        
+        # Build image history context
+        history_context = "## Image History (numbered for reference):\n"
+        for hist_step, hist_t in enumerate(state.cam_history):
+            history_context += f"  Image {hist_step}: position [x={hist_t[0,3]:.2f}m, y={hist_t[1,3]:.2f}m, z={hist_t[2,3]:.2f}m]\n"
+        history_context += "\nAbove are all the images you have rendered during exploration.\n\n"
+        
+        # Build action history (what led to each image)
+        action_history = ""
+        if state.position_history:
+            action_history = "## Your Previous Actions (these led to the images above):\n"
+            action_history += "  Initial Image 0: Starting view (no movement yet)\n"
+            for i, movement in enumerate(state.position_history, 1):
+                action_history += f"  Image {i}: You chose to move forward={movement['forward']:.2f}m, left={movement['left']:.2f}m, up={movement['z_delta']:.2f}m, rotated={movement['rotation']:.1f}° → rendered Image {i}\n"
+            action_history += "\n⚠️  IMPORTANT: Do not repeat these exact movements. Explore new areas and perspectives!\n\n"
+        
+        full_prompt = history_context + action_history + instruction_text
+        
+        # Build message with all images
+        messages = [{
+            "role": "user",
+            "content": [{  "type": "text", "text": full_prompt}]
+        }]
+        
+        # Add all images
+        for img_path in state.image_history:
+            messages[0]["content"].insert(len(messages[0]["content"]) - 1,
+                                         {"type": "image", "image": str(img_path)})
+        
+        batch_messages.append(messages)
+        batch_states.append(state)
+        
+        # Save step info (turn 0 = step 1, turn 1 = step 2, etc. since step 0 is initial render)
+        step_num = turn + 1
+        step_folder = state.base_out / f"step_{step_num:02d}"
+        step_folder.mkdir(parents=True, exist_ok=True)
+        with open(step_folder / "qwen_input_messages.json", "w", encoding="utf-8") as f:
+            json.dump(messages, f, indent=2)
+        with open(step_folder / "qwen_input_instruction.txt", "w", encoding="utf-8") as f:
+            f.write(full_prompt)
+    
+    # Batch process with Qwen3-VL
+    print(f"\n[DEBUG] ========== BATCH GENERATION START ==========")
+    print(f"[DEBUG] Number of questions in batch: {len(batch_messages)}")
+    print(f"[DEBUG] Turn number: {turn}")
+    for i, qs in enumerate(active_questions):
+        print(f"[DEBUG]   Q{qs['q_idx']:03d}: {len(batch_states[i].image_history)} images in history")
+    print(f"[INFO] 🚀 Running batch generation for {len(batch_messages)} questions...")
+    inference_start = time.time()
+    
+    # Apply chat template to all messages
+    print(f"[DEBUG] Applying chat template to {len(batch_messages)} messages...")
+    texts = [
+        processor.apply_chat_template(msg, tokenize=False, add_generation_prompt=True)
+        for msg in batch_messages
+    ]
+    print(f"[DEBUG] Chat templates applied. Text lengths: {[len(t) for t in texts]}")
+    
+    # Process vision info for batch
+    print(f"[DEBUG] Processing vision info for batch...")
+    image_inputs, video_inputs = process_vision_info(batch_messages)
+    print(f"[DEBUG] Vision info processed. Images: {len(image_inputs) if image_inputs else 0}, Videos: {len(video_inputs) if video_inputs else 0}")
+    
+    # Prepare batch inputs
+    print(f"[DEBUG] Tokenizing inputs...")
+    inputs = processor(
+        text=texts,
+        images=image_inputs,
+        videos=video_inputs,
+        padding=True,
+        return_tensors="pt",
+    )
+    inputs = {k: v.to(device) for k, v in inputs.items()}
+    print(f"[DEBUG] Inputs prepared. Shapes: {[f'{k}: {v.shape}' for k, v in inputs.items() if hasattr(v, 'shape')]}")
+    print(f"[DEBUG] Padding side used: {processor.tokenizer.padding_side}")
+    
+    # Batch generation
+    print(f"[DEBUG] Starting model.generate()...")
+    with torch.no_grad():
+        generated_ids = model.generate(**inputs, max_new_tokens=1024, do_sample=False)
+    print(f"[DEBUG] Generation complete. Output shape: {generated_ids.shape}")
+    
+    generated_ids_trimmed = [
+        out_ids[len(in_ids):] for in_ids, out_ids in zip(inputs['input_ids'], generated_ids)
+    ]
+    print(f"[DEBUG] Trimmed output lengths: {[len(ids) for ids in generated_ids_trimmed]}")
+    
+    output_texts = processor.batch_decode(
+        generated_ids_trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=True
+    )
+    print(f"[DEBUG] Decoded {len(output_texts)} outputs. Lengths: {[len(t) for t in output_texts]}")
+    
+    gen_time = time.time() - inference_start
+    per_question_time = gen_time / len(batch_messages)
+    print(f"[INFO] ⏱️  Batch generation completed in {gen_time:.2f}s ({per_question_time:.2f}s per question)")
+    print(f"[DEBUG] ========== BATCH GENERATION END ==========\n")
+    
+    # Distribute timing to each question
+    for qs in active_questions:
+        qs["state"].batch_time_accumulated += per_question_time
+    
+    # Process outputs and update states
+    results = []
+    for i, (state, output_text) in enumerate(zip(batch_states, output_texts)):
+        q_idx = active_questions[i]["q_idx"]
+        step_num = turn + 1  # turn 0 = step 1, etc.
+        step_folder = state.base_out / f"step_{step_num:02d}"
+        attempt_folder = step_folder / f"attempt_0"
+        attempt_folder.mkdir(parents=True, exist_ok=True)
+        
+        print(f"\n[DEBUG] ===== Q{q_idx:03d} Turn {turn} Processing =====")
+        print(f"[DEBUG] Output text type: {type(output_text)}")
+        print(f"[DEBUG] Output text length: {len(output_text)}")
+        print(f"[DEBUG] Output is empty: {len(output_text) == 0}")
+        
+        # Save raw output
+        with open(attempt_folder / "qwen_raw_output.txt", "w", encoding="utf-8") as f:
+            f.write(output_text)
+        print(f"[DEBUG] Saved output to: {attempt_folder / 'qwen_raw_output.txt'}")
+        
+        if len(output_text) > 0:
+            print(f"\n[Q{q_idx:03d} Turn {turn}] Output preview (first 200 chars):\n{output_text[:200]}...")
+        else:
+            print(f"\n[Q{q_idx:03d} Turn {turn}] ⚠️  WARNING: Empty output from model!")
+            print(f"[DEBUG] Input text length was: {len(texts[i]) if i < len(texts) else 'N/A'}")
+            print(f"[DEBUG] Number of images: {len(state.image_history)}")
+        
+        # Parse output
+        rotation_angle, forward_m, left_m, z_delta_m, reasoning_text, raw_obj, done_flag = parse_qwen_output_and_get_movement(output_text)
+        
+        # Check for answer
+        final_answer = None
+        if raw_obj and isinstance(raw_obj, dict):
+            answer_value = raw_obj.get("answer")
+            has_answer = answer_value is not None and str(answer_value).strip().upper() in "ABCDEFGHIJ"
+            
+            if has_answer and done_flag:
+                final_answer = str(answer_value).strip().upper()
+                print(f"[Q{q_idx:03d}] ✅ Final answer: {final_answer}")
+        
+        # Apply movement if valid
+        if rotation_angle is not None and forward_m is not None and left_m is not None and z_delta_m is not None:
+            R_new = parse_rotation_angle(rotation_angle, state.R_current)
+            t_new = apply_movement_in_camera_frame(state.R_current, state.t_current, forward_m, left_m, z_delta_m)
+            
+            next_pose = np.eye(4, dtype=float)
+            next_pose[:3, :3] = R_new
+            next_pose[:3, 3] = t_new
+            
+            with open(attempt_folder / "qwen_valid_marker.txt", "w") as f:
+                f.write(f"VALID pose with rotation_angle={rotation_angle}°\n")
+        else:
+            # Fallback: small perturbation
+            print(f"[Q{q_idx:03d}] ⚠️  No valid movement, using fallback")
+            last = state.cam_history[-1]
+            angle = 10.0 * np.pi / 180.0
+            cos_a = np.cos(angle)
+            sin_a = np.sin(angle)
+            Rz = np.array([[cos_a, -sin_a, 0.0], [sin_a, cos_a, 0.0], [0.0, 0.0, 1.0]])
+            next_pose = last.copy()
+            next_pose[:3, :3] = Rz @ next_pose[:3, :3]
+            forward = next_pose[:3, 2]
+            next_pose[:3, 3] = next_pose[:3, 3] + 0.2 * forward
+            
+            with open(attempt_folder / "fallback_used.txt", "w") as f:
+                f.write("Fallback perturbation used\n")
+        
+        # Save pose and render (turn 0 creates render_01.png, turn 1 creates render_02.png, etc.)
+        save_matrix(step_folder / f"cam_pose_chosen_step_{step_num:02d}.npy", next_pose)
+        img_next = state.base_out / f"render_{step_num:02d}.png"
+        render_mesh_from_pose(state.mesh, next_pose, img_next, fxfy=DEFAULT_FX_FY)
+        
+        # Update state
+        state.image_history.append(str(img_next))
+        state.cam_history.append(next_pose)
+        state.R_current = next_pose[:3, :3]
+        state.t_current = next_pose[:3, 3]
+        state.actual_steps = step_num  # Properly track step number (not turn number)
+        
+        if rotation_angle is not None and forward_m is not None:
+            state.position_history.append({
+                "rotation": rotation_angle,
+                "forward": forward_m,
+                "left": left_m,
+                "z_delta": z_delta_m
+            })
+        
+        results.append({
+            "done": done_flag and final_answer is not None,
+            "final_answer": final_answer
+        })
+    
+    return results
+
+def complete_question_sequentially(qs, start_turn, num_steps):
+    """Complete remaining turns for a single question sequentially."""
+    state = qs["state"]
+    q_idx = qs["q_idx"]
+    
+    print(f"\n[DEBUG] ===== Q{q_idx:03d} SEQUENTIAL PHASE START =====")
+    print(f"[DEBUG] Starting from turn {start_turn}, ending at turn {num_steps}")
+    print(f"[DEBUG] Batched time accumulated so far: {state.batch_time_accumulated:.2f}s")
+    
+    for turn in range(start_turn, num_steps + 1):
+        if qs["done"]:
+            break
+        
+        print(f"[Q{q_idx:03d}] Turn {turn} (sequential)")
+        is_final_step = (turn == num_steps)
+        
+        # Build base instruction (without history)
+        instruction_text = build_instruction_text(
+            state.R_current, state.t_current, state.question,
+            bbox=(state.bbox_mins, state.bbox_maxs),
+            options=state.choices,
+            is_final_step=is_final_step,
+            movement_history=None,  # We'll add this separately
+            step_num=turn,
+            question_type=state.question_type
+        )
+        
+        # Build image history context
+        history_context = "## Image History (numbered for reference):\n"
+        for hist_step, hist_t in enumerate(state.cam_history):
+            history_context += f"  Image {hist_step}: position [x={hist_t[0,3]:.2f}m, y={hist_t[1,3]:.2f}m, z={hist_t[2,3]:.2f}m]\n"
+        history_context += "\nAbove are all the images you have rendered during exploration.\n\n"
+        
+        # Build action history (what led to each image)
+        action_history = ""
+        if state.position_history:
+            action_history = "## Your Previous Actions (these led to the images above):\n"
+            action_history += "  Initial Image 0: Starting view (no movement yet)\n"
+            for i, movement in enumerate(state.position_history, 1):
+                action_history += f"  Image {i}: You chose to move forward={movement['forward']:.2f}m, left={movement['left']:.2f}m, up={movement['z_delta']:.2f}m, rotated={movement['rotation']:.1f}° → rendered Image {i}\n"
+            action_history += "\n⚠️  IMPORTANT: Do not repeat these exact movements. Explore new areas and perspectives!\n\n"
+        
+        full_prompt = history_context + action_history + instruction_text
+        
+        # Build messages
+        messages = [{
+            "role": "user",
+            "content": [{"type": "text", "text": full_prompt}]
+        }]
+        
+        for img_path in state.image_history:
+            messages[0]["content"].insert(len(messages[0]["content"]) - 1,
+                                         {"type": "image", "image": str(img_path)})
+        
+        # Save step info
+        step_folder = state.base_out / f"step_{turn:02d}"
+        step_folder.mkdir(parents=True, exist_ok=True)
+        with open(step_folder / "qwen_input_messages.json", "w", encoding="utf-8") as f:
+            json.dump(messages, f, indent=2)
+        
+        # Single inference
+        print(f"\n[DEBUG] Q{q_idx:03d} Turn {turn}: Starting single inference...")
+        seq_start = time.time()
+        inputs = build_inputs_with_cached_vision(
+            text_prompt=full_prompt,
+            image_paths=state.image_history,
+            cached_vision_embeds=None
+        )
+        
+        attempt_folder = step_folder / "attempt_0"
+        attempt_folder.mkdir(parents=True, exist_ok=True)
+        
+        print(f"[DEBUG] Q{q_idx:03d}: Running model.generate()...")
+        with torch.no_grad():
+            generated_ids = model.generate(**inputs, max_new_tokens=1024, do_sample=False)
+        
+        print(f"[DEBUG] Q{q_idx:03d}: Decoding output...")
+        generated_ids_trimmed = [out_ids[len(in_ids):] for in_ids, out_ids in zip(inputs['input_ids'], generated_ids)]
+        output_texts = processor.batch_decode(generated_ids_trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=True)
+        output_text = output_texts[0] if isinstance(output_texts, (list, tuple)) else str(output_texts)
+        
+        seq_time = time.time() - seq_start
+        state.sequential_time += seq_time
+        print(f"[DEBUG] Q{q_idx:03d} Turn {turn}: Inference took {seq_time:.2f}s")
+        print(f"[DEBUG] Q{q_idx:03d}: Output length: {len(output_text)}")
+        
+        with open(attempt_folder / "qwen_raw_output.txt", "w", encoding="utf-8") as f:
+            f.write(output_text)
+        
+        # Parse and process (similar to batch)
+        rotation_angle, forward_m, left_m, z_delta_m, reasoning_text, raw_obj, done_flag = parse_qwen_output_and_get_movement(output_text)
+        
+        # Check for answer
+        final_answer = None
+        if raw_obj and isinstance(raw_obj, dict):
+            answer_value = raw_obj.get("answer")
+            has_answer = answer_value is not None and str(answer_value).strip().upper() in "ABCDEFGHIJ"
+            
+            if has_answer and done_flag:
+                final_answer = str(answer_value).strip().upper()
+                qs["final_answer"] = final_answer
+                qs["done"] = True
+                print(f"[Q{q_idx:03d}] ✅ Final answer: {final_answer}")
+        
+        # Apply movement
+        if rotation_angle is not None and forward_m is not None and left_m is not None and z_delta_m is not None:
+            R_new = parse_rotation_angle(rotation_angle, state.R_current)
+            t_new = apply_movement_in_camera_frame(state.R_current, state.t_current, forward_m, left_m, z_delta_m)
+            next_pose = np.eye(4, dtype=float)
+            next_pose[:3, :3] = R_new
+            next_pose[:3, 3] = t_new
+        else:
+            last = state.cam_history[-1]
+            angle = 10.0 * np.pi / 180.0
+            cos_a = np.cos(angle)
+            sin_a = np.sin(angle)
+            Rz = np.array([[cos_a, -sin_a, 0.0], [sin_a, cos_a, 0.0], [0.0, 0.0, 1.0]])
+            next_pose = last.copy()
+            next_pose[:3, :3] = Rz @ next_pose[:3, :3]
+            forward = next_pose[:3, 2]
+            next_pose[:3, 3] = next_pose[:3, 3] + 0.2 * forward
+        
+        # Save and render (turn N creates render_{N}.png in sequential phase)
+        save_matrix(step_folder / f"cam_pose_chosen_step_{turn:02d}.npy", next_pose)
+        img_next = state.base_out / f"render_{turn:02d}.png"
+        render_mesh_from_pose(state.mesh, next_pose, img_next, fxfy=DEFAULT_FX_FY)
+        
+        state.image_history.append(str(img_next))
+        state.cam_history.append(next_pose)
+        state.R_current = next_pose[:3, :3]
+        state.t_current = next_pose[:3, 3]
+        state.actual_steps = turn + 1
+        
+        if rotation_angle is not None and forward_m is not None:
+            state.position_history.append({
+                "rotation": rotation_angle,
+                "forward": forward_m,
+                "left": left_m,
+                "z_delta": z_delta_m
+            })
+        
+        if qs["done"]:
+            break
+    
+    # Calculate total elapsed time (batch time + sequential time)
+    state.elapsed_time = state.batch_time_accumulated + state.sequential_time
+    print(f"\n[DEBUG] ===== Q{q_idx:03d} SEQUENTIAL PHASE END =====")
+    print(f"[DEBUG] Total time: {state.elapsed_time:.2f}s (batched: {state.batch_time_accumulated:.2f}s, sequential: {state.sequential_time:.2f}s)")
+
 def load_vsi_bench_questions():
     """
     Load VSI-Bench questions filtered by:
@@ -716,26 +1220,59 @@ def load_vsi_bench_questions():
             "question": row["question"],
             "choices": row.get("options", []),
             "answer_id": row.get("ground_truth", -1),
+            "question_type": row.get("question_type", "unknown"),
         })
     
     return questions
 
-# Main entry point for running all questions
-# Main entry point for running all questions
-def main_vsi_bench_loop(mesh_base_dir=MESH_BASE_DIR, num_steps_per_question=NUM_STEPS, continue_from=None):
+# Main entry point for running all questions WITH BATCH INFERENCE
+def main_vsi_bench_loop(mesh_base_dir=MESH_BASE_DIR, num_steps_per_question=NUM_STEPS, continue_from=None, max_batched_turns=MAX_BATCHED_TURNS, batch_size=BATCH_SIZE, num_questions=None):
     """
-    Main loop: iterate through all VSI-Bench questions, find PLY files, and run reasoning.
-    If `continue_from` is provided, resumes from the specified folder and skips completed questions.
+    Main loop with BATCH INFERENCE: process multiple questions in parallel for the first max_batched_turns.
+    After max_batched_turns, continue each question sequentially.
+    
+    EXECUTION ORDER:
+    1. Load all questions from VSI-Bench
+    2. Filter out completed questions (if continuing)
+    3. Initialize ALL question states (load meshes, render initial views, create folders)
+    4. BATCHED PHASE (turns 0 to max_batched_turns-1):
+       - For each turn:
+         - Split active questions into mini-batches of size batch_size
+         - For each mini-batch:
+           * Prepare messages for all questions in mini-batch
+           * Run single batched inference
+           * Process outputs and update all question states
+           * Save renders and poses
+    5. SEQUENTIAL PHASE (remaining turns):
+       - For each question individually:
+         * Complete remaining turns sequentially
+         * Save final results
+    
+    Example with MAX_BATCHED_TURNS=4, BATCH_SIZE=2, 10 questions:
+    - Initialize: Q1, Q2, Q3, ..., Q10 (load meshes, create folders)
+    - Turn 0: Mini-batch [Q1, Q2], then [Q3, Q4], then [Q5, Q6], then [Q7, Q8], then [Q9, Q10]
+    - Turn 1: Mini-batch [Q1, Q2], then [Q3, Q4], then [Q5, Q6], then [Q7, Q8], then [Q9, Q10]
+    - Turn 2: Mini-batch [Q1, Q2], then [Q3, Q4], then [Q5, Q6], then [Q7, Q8], then [Q9, Q10]
+    - Turn 3: Mini-batch [Q1, Q2], then [Q3, Q4], then [Q5, Q6], then [Q7, Q8], then [Q9, Q10]
+    - Sequential: Q1 turns 4-8, then Q2 turns 4-8, then Q3 turns 4-8, ..., then Q10 turns 4-8
     """
     print("\n" + "=" * 80)
-    print("🚀 VSI-BENCH ROUTE PLANNING EVALUATION")
+    print("🚀 VSI-BENCH ROUTE PLANNING EVALUATION (BATCHED)")
+    print(f"   Batch processing first {max_batched_turns} turns across questions")
+    print(f"   Mini-batch size: {batch_size} questions at a time")
     print("=" * 80 + "\n")
 
     questions = load_vsi_bench_questions()
+    
+    # Limit number of questions if specified
+    if num_questions is not None and num_questions > 0:
+        questions = questions[:num_questions]
+        print(f"[INFO] Limited to first {num_questions} questions for this run")
+    
     print(f"[INFO] Loaded {len(questions)} questions\n")
 
     results = []
-    csv_rows = []  # Track CSV data for all runs
+    csv_rows = []
 
     # Determine experiment directory
     if continue_from:
@@ -743,7 +1280,7 @@ def main_vsi_bench_loop(mesh_base_dir=MESH_BASE_DIR, num_steps_per_question=NUM_
         print(f"[INFO] Resuming from existing folder: {exp_base_dir.resolve()}\n")
     else:
         exp_timestamp = timestamp_str()
-        exp_base_dir = Path("experiment_logs") / exp_timestamp
+        exp_base_dir = Path("experiment_logs") / f"{exp_timestamp}_batched"
         exp_base_dir.mkdir(parents=True, exist_ok=True)
         print(f"[INFO] 📁 Experiment logs: {exp_base_dir.resolve()}\n")
 
@@ -770,88 +1307,160 @@ def main_vsi_bench_loop(mesh_base_dir=MESH_BASE_DIR, num_steps_per_question=NUM_
     for subfolder in exp_base_dir.iterdir():
         if subfolder.is_dir() and subfolder.name.startswith("q"):
             completed_questions.add(subfolder.name)
+            completed_questions.add(subfolder.name)
 
-    for q_idx, q_data in enumerate(questions, 1):
+    # Prepare question states - only process non-completed questions
+    question_states = []
+    processed_count = 0  # Counter for questions that actually get processed
+    
+    for dataset_idx, q_data in enumerate(questions, 1):
         scene_id = q_data["scene_name"]
-        question_text = q_data["question"]
-        choices = q_data["choices"]
-        ground_truth_id = q_data["answer_id"]
-
-        question_folder = f"q{q_idx:03d}"
-        if question_folder in completed_questions:
-            print(f"[INFO] Skipping already completed question: {question_folder}")
-            continue
-
-        print("\n" + "─" * 80)
-        print(f"[Q{q_idx:03d}] Scene: {scene_id}")
-        print(f"[Q{q_idx:03d}] Question: {question_text}")
-        print(f"[Q{q_idx:03d}] Options:")
-        for i, choice in enumerate(choices):
-            print(f"[Q{q_idx:03d}]   {chr(65+i)}) {choice}")
-        print(f"[Q{q_idx:03d}] Ground Truth: {ground_truth_id})")
-        print("─" * 80)
-
-        # Find mesh file
         mesh_file = find_mesh_file(scene_id, mesh_base_dir)
+        
         if mesh_file is None:
-            print(f"[ERROR] Could not find mesh file for scene {scene_id}. Skipping.\n")
+            print(f"[WARN] Dataset question {dataset_idx}: Could not find mesh file for scene {scene_id}. Skipping.\n")
             results.append({
                 "scene_id": scene_id,
-                "question": question_text,
+                "question": q_data["question"],
                 "status": "SKIPPED - No mesh found",
                 "model_answer": None,
-                "ground_truth": ground_truth_id,
+                "ground_truth": q_data["answer_id"],
                 "correct": False
             })
             continue
-
-        # Run reasoning pipeline with shared experiment base directory
-        print(f"[INFO] Starting reasoning pipeline for question {q_idx}...")
-        run_timestamp = datetime.now().strftime("%y%m%d-%H%M%S")
-        model_answer, elapsed_time, actual_steps = run_pipeline(
-            mesh_file,
-            question=question_text,
-            choices=choices,
-            num_steps=num_steps_per_question,
-            question_id=q_idx,
-            experiment_base_dir=str(exp_base_dir),
-            scene_id=scene_id
-        )
-
-        # Check correctness
-        ground_truth_letter = ground_truth_id
-        is_correct = (model_answer == ground_truth_letter) 
-
-        print(f"\n[Q{q_idx:03d}] Model Answer: {model_answer}")
-        print(f"[Q{q_idx:03d}] Ground Truth: {ground_truth_letter}")
-        print(f"[Q{q_idx:03d}] Result: {'✅ CORRECT' if is_correct else '❌ INCORRECT'}\n")
-
-        results.append({
+        
+        # Only increment processed_count for questions with valid meshes
+        processed_count += 1
+        question_folder = f"q{processed_count:03d}"
+        
+        if question_folder in completed_questions:
+            print(f"[INFO] Skipping already completed question: {question_folder}")
+            continue
+        
+        question_states.append({
+            "q_idx": processed_count,  # Sequential numbering for processed questions only
+            "q_data": q_data,
+            "mesh_file": mesh_file,
             "scene_id": scene_id,
-            "question": question_text,
+            "state": None,  # Will hold QuestionState object
+            "done": False,
+            "final_answer": None
+        })
+    
+    print(f"[INFO] Processing {len(question_states)} questions in batched mode\n")
+    
+    # Initialize all question states (setup meshes, initial renders)
+    print("[INFO] 🔧 Initializing all question states...")
+    for qs in question_states:
+        qs["state"] = initialize_question_state(
+            qs["mesh_file"],
+            qs["q_data"]["question"],
+            qs["q_data"]["choices"],
+            qs["q_idx"],
+            str(exp_base_dir),
+            qs["scene_id"]
+        )
+    print("[INFO] ✅ All question states initialized\n")
+    
+    # BATCHED PHASE: Process turns 0 to (max_batched_turns-1) in batch
+    # Process questions in mini-batches to avoid memory issues
+    for turn in range(max_batched_turns):
+        print(f"\n{'='*80}")
+        print(f"🔄 BATCHED TURN {turn}/{max_batched_turns-1}")
+        print(f"{'='*80}\n")
+        
+        # Filter active questions (not done yet)
+        active_questions = [qs for qs in question_states if not qs["done"]]
+        
+        if len(active_questions) == 0:
+            print(f"[INFO] All questions completed before turn {turn}")
+            break
+        
+        print(f"[INFO] Processing {len(active_questions)} active questions in mini-batches of {batch_size}")
+        
+        # Process in mini-batches to control memory usage
+        for batch_start in range(0, len(active_questions), batch_size):
+            batch_end = min(batch_start + batch_size, len(active_questions))
+            mini_batch = active_questions[batch_start:batch_end]
+            
+            q_indices = [qs["q_idx"] for qs in mini_batch]
+            print(f"[INFO] 🔄 Mini-batch [{batch_start+1}-{batch_end}]: Questions {q_indices}")
+            
+            # Run batched inference for this mini-batch
+            batch_results = run_batched_turn(mini_batch, turn)
+            
+            # Update states based on batch results
+            for qs, result in zip(mini_batch, batch_results):
+                # Only mark as done if we have both done=True AND a valid final answer
+                if result["done"] and result["final_answer"] is not None:
+                    qs["done"] = True
+                    qs["final_answer"] = result["final_answer"]
+                    
+                    # Calculate elapsed time for questions finishing in batched phase
+                    qs["state"].elapsed_time = qs["state"].batch_time_accumulated
+                    
+                    ground_truth_letter = qs["q_data"]["answer_id"]
+                    model_answer = qs["final_answer"]
+                    is_correct = (model_answer == ground_truth_letter)
+                    
+                    print(f"[Q{qs['q_idx']:03d}] 🏁 Completed early in batched phase (turn {turn})!")
+                    print(f"[Q{qs['q_idx']:03d}] Model Answer: {model_answer}")
+                    print(f"[Q{qs['q_idx']:03d}] Ground Truth: {ground_truth_letter}")
+                    print(f"[Q{qs['q_idx']:03d}] Result: {'✅ CORRECT' if is_correct else '❌ INCORRECT'}\n")
+    
+    # SEQUENTIAL PHASE: Complete remaining turns for each question individually
+    print(f"\n{'='*80}")
+    print(f"📝 SEQUENTIAL PHASE: Completing remaining turns")
+    print(f"{'='*80}\n")
+    
+    for qs in question_states:
+        if not qs["done"]:
+            print(f"\n[Q{qs['q_idx']:03d}] Continuing sequentially from turn {max_batched_turns}...")
+            complete_question_sequentially(qs, start_turn=max_batched_turns, num_steps=num_steps_per_question)
+        
+        # Finalize results for this question
+        run_timestamp = datetime.now().strftime("%y%m%d-%H%M%S")
+        ground_truth_letter = qs["q_data"]["answer_id"]
+        model_answer = qs["final_answer"]
+        
+        # Handle case where model never provided a valid answer
+        if model_answer is None:
+            print(f"[WARN] Q{qs['q_idx']:03d} never provided a valid answer. Recording as 'NO_ANSWER'.")
+            model_answer = "NO_ANSWER"
+        
+        is_correct = (model_answer == ground_truth_letter)
+        
+        print(f"\n[Q{qs['q_idx']:03d}] Model Answer: {model_answer}")
+        print(f"[Q{qs['q_idx']:03d}] Ground Truth: {ground_truth_letter}")
+        print(f"[Q{qs['q_idx']:03d}] Result: {'✅ CORRECT' if is_correct else '❌ INCORRECT'}\n")
+        
+        results.append({
+            "scene_id": qs["scene_id"],
+            "question": qs["q_data"]["question"],
             "status": "COMPLETED",
             "model_answer": model_answer,
             "ground_truth": ground_truth_letter,
             "correct": is_correct
         })
-
-        # Add to CSV tracking
+        
         csv_rows.append({
-            "question": question_text,
-            "scene_id": scene_id,
+            "question_id": f"q{qs['q_idx']:03d}",
+            "scene_id": qs["scene_id"],
             "gt_answer": ground_truth_letter,
             "model_answer": model_answer,
-            "time_seconds": elapsed_time,
-            "num_steps": actual_steps,
-            "timestamp": run_timestamp
+            "time_seconds": qs["state"].elapsed_time,
+            "num_steps": qs["state"].actual_steps,
+            "timestamp": run_timestamp,
+            "question": qs["q_data"]["question"]
         })
 
-        # Save incremental results (both JSON and CSV)
+        # Save incremental results (both JSON and CSV) after each question
         with open(results_file, "w") as f:
             json.dump(results, f, indent=2)
         
         csv_df = pd.DataFrame(csv_rows)
         csv_df.to_csv(csv_file, index=False)
+        print(f"[INFO] 💾 Saved progress to {csv_file.name} (Q{qs['q_idx']:03d} completed)")
 
         # Print running accuracy (includes all completed questions from current and previous runs)
         correct_so_far = sum(1 for r in results if r["correct"])
@@ -876,11 +1485,11 @@ def main_vsi_bench_loop(mesh_base_dir=MESH_BASE_DIR, num_steps_per_question=NUM_
     # Save final results to JSON and CSV in the experiment directory
     with open(results_file, "w") as f:
         json.dump(results, f, indent=2)
-    print(f"\n[INFO] Results saved to: {results_file}")
+    print(f"\n[INFO] 🏁 Final results saved to: {results_file}")
     
     csv_df = pd.DataFrame(csv_rows)
     csv_df.to_csv(csv_file, index=False)
-    print(f"[INFO] CSV results saved to: {csv_file}")
+    print(f"[INFO] 🏁 Final CSV results saved to: {csv_file}")
 
 def run_pipeline(mesh_path: Path, question="", choices=None, cache_dir=CACHE_DIR, num_steps=NUM_STEPS, question_id=0, experiment_base_dir="experiment_logs", scene_id=None):
     """
@@ -1216,16 +1825,22 @@ def run_pipeline(mesh_path: Path, question="", choices=None, cache_dir=CACHE_DIR
 
 # Main entry for batch evaluation
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Run VSI-Bench reasoning loop or single PLY file.")
+    parser = argparse.ArgumentParser(description="Run VSI-Bench reasoning loop with BATCH INFERENCE or single PLY file.")
     parser.add_argument("--ply", default=None, help="Path to single PLY file (optional, for single run)")
     parser.add_argument("--question", default="", help="Question text (for single run)")
-    parser.add_argument("--batch", action="store_true", help="Run full VSI-Bench batch evaluation")
+    parser.add_argument("--batch", action="store_true", help="Run full VSI-Bench batch evaluation with batched turns")
     parser.add_argument("--steps", type=int, default=NUM_STEPS, help="Number of reasoning steps per question")
+    parser.add_argument("--max-batched-turns", type=int, default=MAX_BATCHED_TURNS, 
+                        help=f"Number of turns to process in batch mode (default: {MAX_BATCHED_TURNS})")
+    parser.add_argument("--batch-size", type=int, default=BATCH_SIZE,
+                        help=f"Number of questions to process in parallel at once (default: {BATCH_SIZE}, higher=faster but more GPU memory)")
+    parser.add_argument("--num-questions", type=int, default=None,
+                        help="Limit the number of questions to process (useful for testing, default: process all questions)")
     parser.add_argument("--continue", dest="continue_from", default=None, help="Resume from the most recent experiment folder and skip completed questions")
     args = parser.parse_args()
 
     if args.batch:
-        print("[INFO] Running VSI-Bench batch evaluation...")
+        print(f"[INFO] Running VSI-Bench BATCHED evaluation (batching first {args.max_batched_turns} turns)...")
         if args.continue_from == "recent":
             # Find the most recent experiment folder
             exp_logs = Path("experiment_logs")
@@ -1236,7 +1851,13 @@ if __name__ == "__main__":
                     args.continue_from = str(recent_folder)
                 else:
                     args.continue_from = None
-        main_vsi_bench_loop(num_steps_per_question=args.steps, continue_from=args.continue_from)
+        main_vsi_bench_loop(
+            num_steps_per_question=args.steps, 
+            continue_from=args.continue_from,
+            max_batched_turns=args.max_batched_turns,
+            batch_size=args.batch_size,
+            num_questions=args.num_questions
+        )
     elif args.ply:
         print(f"[INFO] Running single mesh: {args.ply}")
         answer, elapsed_time, actual_steps = run_pipeline(Path(args.ply), question=args.question, num_steps=args.steps)
