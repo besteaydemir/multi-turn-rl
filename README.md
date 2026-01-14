@@ -49,42 +49,7 @@ python analysis/scripts/analyze_results.py
 - `scripts/utilities/starting_point.py` - Initialization helper
 - `utils/` - Shared utility modules (camera, rendering, parsing)
 
-## Repository Structure
 
-```
-rl_multi_turn/
-├── evaluation/                                   # Evaluation scripts
-│   ├── sequential.py                             # Main script
-│   ├── angle_based.py                            # Angle variant
-│   └── batched.py                                # Batched version
-├── training/                                     # Training scripts
-│   └── train.py                                  # RL training
-├── run_evaluation_sequential_continue.sh         # SLURM job
-├── config.py                                     # Configuration
-├── example_config.yaml                           # Config template
-├── requirements.txt                              # Dependencies
-│
-├── analysis/scripts/                             # Result analysis
-├── rl_environment/                               # RL environment
-├── rl_trainer/                                   # Training modules  
-├── utils/                                        # Utilities
-├── tests/                                        # Test suite
-├── scripts/                                      # Helper scripts
-│   ├── deprecated/                               # Old scripts
-│   └── utilities/                                # Utility scripts
-└── docs/                                         # Documentation
-```
-
-## Question Types & Metrics
-
-**Multiple Choice (Accuracy):**
-- `object_rel_distance` - Relative distance relationships
-
-**Numerical (MRA = 1/10 × Σ 1[|y_pred - y|/y < 1 - θ], θ ∈ {0.5, 0.55, ..., 0.95}):**
-- `object_size_estimation` - Object dimensions  
-- `room_size_estimation` - Room measurements
-- `object_counting` - Object counts
-- `object_abs_distance` - Absolute distances
 
 ## Command Line Options
 
