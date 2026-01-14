@@ -18,7 +18,7 @@ sbatch run_evaluation_sequential_continue.sh
 sbatch --array=1 run_evaluation_sequential_continue.sh
 
 # Test mode (5 questions locally)
-python render_point_cloud_qwen_sequential_split.py --test --steps 8
+python evaluation/sequential.py --test --steps 8
 ```
 
 **Analyze Results:**
@@ -29,9 +29,9 @@ python analysis/scripts/analyze_results.py
 ## Entry Points
 
 ### Main Evaluation Scripts
-- `render_point_cloud_qwen_sequential_split.py` - Primary evaluation script with split support
-- `render_point_cloud_qwen_angle.py` - Angle-based evaluation variant
-- `render_point_cloud_qwen_angle_batched.py` - Batched inference version
+- `evaluation/sequential.py` - Primary evaluation script with split support
+- `evaluation/angle_based.py` - Angle-based evaluation variant
+- `evaluation/batched.py` - Batched inference version
 
 ### SLURM Submission
 - `run_evaluation_sequential_continue.sh` - Submit parallel jobs (4 splits)
@@ -40,7 +40,7 @@ python analysis/scripts/analyze_results.py
 - `analysis/scripts/analyze_results.py` - Generate plots and statistics
 
 ### Training
-- `train_rl.py` - RL training script
+- `training/train.py` - RL training script
 - `rl_environment/` - Environment implementation
 - `rl_trainer/` - Training utilities
 
@@ -53,9 +53,13 @@ python analysis/scripts/analyze_results.py
 
 ```
 rl_multi_turn/
-├── render_point_cloud_qwen_sequential_split.py  # Main script
+├── evaluation/                                   # Evaluation scripts
+│   ├── sequential.py                             # Main script
+│   ├── angle_based.py                            # Angle variant
+│   └── batched.py                                # Batched version
+├── training/                                     # Training scripts
+│   └── train.py                                  # RL training
 ├── run_evaluation_sequential_continue.sh         # SLURM job
-├── train_rl.py                                   # RL training
 ├── config.py                                     # Configuration
 ├── example_config.yaml                           # Config template
 ├── requirements.txt                              # Dependencies
@@ -85,7 +89,7 @@ rl_multi_turn/
 ## Command Line Options
 
 ```bash
-python render_point_cloud_qwen_sequential_split.py \
+python evaluation/sequential.py \
     --split 1 \                    # Which split (1-4)
     --num-splits 4 \               # Total splits
     --steps 8 \                    # Max reasoning steps
@@ -111,7 +115,7 @@ experiment_logs/YYYYMMDD_HHMMSS_sequential_splitXofY/
 
 ## Configuration
 
-Key parameters in `render_point_cloud_qwen_sequential_split.py`:
+Key parameters in `evaluation/sequential.py`:
 ```python
 NUM_STEPS = 8                                    # Max reasoning steps
 IMAGE_WH = (640, 480)                            # Render resolution

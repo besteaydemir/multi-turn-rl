@@ -66,7 +66,7 @@ echo "=========================================="
 
 # Run the sequential split evaluation
 cd /dss/dsshome1/06/di38riq/rl_multi_turn
-python render_point_cloud_qwen_sequential_split.py \
+python evaluation/sequential.py \
     --split $SPLIT_NUM \
     --num-splits $NUM_SPLITS \
     --steps $STEPS

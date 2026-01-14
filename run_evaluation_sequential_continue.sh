@@ -86,13 +86,13 @@ echo "=========================================="
 cd /dss/dsshome1/06/di38riq/rl_multi_turn
 if [ -z "$CONTINUE_DIR" ]; then
     # Fresh run
-    python render_point_cloud_qwen_sequential_split.py \
+    python evaluation/sequential.py \
         --split $SPLIT_NUM \
         --num-splits $NUM_SPLITS \
         --steps $STEPS
 else
     # Continue from existing
-    python render_point_cloud_qwen_sequential_split.py \
+    python evaluation/sequential.py \
         --split $SPLIT_NUM \
         --num-splits $NUM_SPLITS \
         --steps $STEPS \
