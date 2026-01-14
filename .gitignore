@@ -62,3 +62,7 @@ Thumbs.db
 slurm-*.out
 *.err
 *.out
+
+# Docs build outputs
+_build/
+site/
