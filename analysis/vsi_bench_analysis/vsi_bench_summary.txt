@@ -1,0 +1,38 @@
+VSI-BENCH DATASET ANALYSIS
+================================================================================
+
+Total questions: 5130
+Unique datasets: 3
+Unique question types: 10
+
+QUESTION TYPES BY SOURCE DATASET
+================================================================================
+question_type_grouped  obj_appearance_order  object_abs_distance  object_counting  object_rel_direction  object_rel_distance  object_size_estimation  room_size_estimation  route_planning  Total
+dataset                                                                                                                                                                                          
+arkitscenes                               0                  277              166                   374                  167                     363                   150             104   1601
+scannet                                 390                  347              223                   343                  259                     357                    88              64   2071
+scannetpp                               228                  210              176                   251                  284                     233                    50              26   1458
+Total                                   618                  834              565                   968                  710                     953                   288             194   5130
+
+QUESTION TYPES BY SOURCE DATASET (Percentages)
+================================================================================
+question_type_grouped  obj_appearance_order  object_abs_distance  object_counting  object_rel_direction  object_rel_distance  object_size_estimation  room_size_estimation  route_planning
+dataset                                                                                                                                                                                   
+arkitscenes                            0.00                17.30            10.37                 23.36                10.43                   22.67                  9.37            6.50
+scannet                               18.83                16.76            10.77                 16.56                12.51                   17.24                  4.25            3.09
+scannetpp                             15.64                14.40            12.07                 17.22                19.48                   15.98                  3.43            1.78
+
+MULTIPLE CHOICE ANALYSIS
+================================================================================
+                             with_options  total  percentage      question_format
+question_type                                                                    
+obj_appearance_order                  618    618       100.0      Multiple Choice
+object_rel_direction_easy             217    217       100.0      Multiple Choice
+route_planning                        194    194       100.0      Multiple Choice
+object_rel_direction_hard             373    373       100.0      Multiple Choice
+object_rel_direction_medium           378    378       100.0      Multiple Choice
+object_rel_distance                   710    710       100.0      Multiple Choice
+object_abs_distance                     0    834         0.0  Numerical/Free-form
+object_counting                         0    565         0.0  Numerical/Free-form
+object_size_estimation                  0    953         0.0  Numerical/Free-form
+room_size_estimation                    0    288         0.0  Numerical/Free-form

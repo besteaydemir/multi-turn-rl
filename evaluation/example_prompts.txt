@@ -1,0 +1,248 @@
+================================================================================
+EXAMPLE 1: ROUTE PLANNING - EXPLORATION PHASE (Step 3/7)
+================================================================================
+
+You are an embodied agent exploring a 3D room to answer a spatial reasoning question.
+
+**Your Position & Room Bounds:**
+- Room dimensions: 4.7m (X) x 5.6m (Y)
+- X range: [0.50, 5.20] meters
+- Y range: [0.80, 6.40] meters  
+- **Your current position:** X=2.50m, Y=3.10m, Z=1.60m
+
+---
+**TASK: Route Planning**
+You need to understand a navigation route between objects in the room.
+- First, locate the STARTING object mentioned (e.g., "beginning at the tv")
+- Identify the DESTINATION object 
+- Trace the route and determine which turns (left/right/back) are needed
+- Consider the spatial layout from the robot's perspective at each step
+
+**Question:** Beginning at the tv, you are facing the door. If you turn back, turn left, turn left, turn right, what do you end up facing?
+
+**Answer Options:**
+A. Turn Left, Turn Left
+B. Turn Right, Turn Left
+C. Turn Left, Turn Right
+D. Turn Right, Turn Right
+
+Step 3/7 - Combine rotation AND movement to explore efficiently!
+
+---
+
+**STEP 3/7 - EXPLORATION PHASE (4 steps remaining)**
+
+🎯 **What to do this step:**
+1. Look at the current image - what objects/features do you see?
+2. Identify which objects from the question are visible (if any)
+3. Plan where to move next to find missing objects or get better views
+4. Execute BOTH rotation AND translation to reach new areas
+
+⚙️ **Movement Controls** (rotation FIRST, then translation in new direction):
+- **rotation_angle_degrees**: -90 to +90 (negative=right, positive=left)
+- **forward_meters**: -1.0 to +1.0 (walk forward/back in your facing direction)
+- **left_meters**: -0.5 to +0.5 (strafe left/right perpendicular to facing)
+
+📐 **Examples:**
+- Turn left and approach: {"rotation_angle_degrees": 60, "forward_meters": 0.8, "left_meters": 0.0, ...}
+- Turn around and move: {"rotation_angle_degrees": 180, "forward_meters": 0.6, "left_meters": 0.0, ...}
+- Strafe right while moving: {"rotation_angle_degrees": 0, "forward_meters": 0.7, "left_meters": -0.3, ...}
+- Small adjustment: {"rotation_angle_degrees": 15, "forward_meters": 0.3, "left_meters": 0.1, ...}
+- Large movement to opposite corner: {"rotation_angle_degrees": -45, "forward_meters": 1.0, "left_meters": 0.0, ...}
+
+⚠️ **Critical: ACTUALLY MOVE!**
+- Prefer combining rotation + forward movement in each step
+- Don't just rotate in place (rotation=90, forward=0) - you'll stay in the same spot!
+- The room is approximately 4.7m x 5.6m. Cover different areas efficiently to find all relevant objects.
+
+❌ **Do NOT answer yet** unless you've seen all objects mentioned in the question!
+
+
+---
+**OUTPUT FORMAT:**
+
+Think step-by-step:
+1. What do I see in the current image?
+2. What objects from the question have I found? What's still missing?
+3. Where should I move next to find them?
+
+Then output JSON:
+```json
+{
+  "rotation_angle_degrees": <-90 to 90>,
+  "forward_meters": <-1.0 to 1.0>,
+  "left_meters": <-0.5 to 0.5>,
+  "z_delta_meters": <-0.3 to 0.3>,
+  "answer": <"A"/"B"/"C"/"D" or null>,
+  "done": <true/false>
+}
+```
+
+---
+**Your movement history (avoid repeating):**
+Step 1: rot=90°, fwd=0.5m, left=0.0m
+Step 2: rot=-45°, fwd=0.7m, left=0.2m
+
+
+================================================================================
+EXAMPLE 2: OBJECT DISTANCE - FINAL STEP (Step 7/7)
+================================================================================
+
+You are an embodied agent exploring a 3D room to answer a spatial reasoning question.
+
+**Your Position & Room Bounds:**
+- Room dimensions: 4.7m (X) x 5.6m (Y)
+- X range: [0.50, 5.20] meters
+- Y range: [0.80, 6.40] meters  
+- **Your current position:** X=2.50m, Y=3.10m, Z=1.60m
+
+---
+**TASK: Relative Distance Comparison**
+You need to determine which object is CLOSEST to a reference object.
+- Locate the reference object mentioned in the question
+- Find ALL candidate objects listed in the options
+- Compare their distances to the reference object
+- Pick the CLOSEST one
+
+**Question:** Which of the following objects is closest to the desk?
+
+**Answer Options:**
+A. chair
+B. lamp
+C. bed
+D. cabinet
+
+⚠️ FINAL STEP: Provide your answer now!
+
+---
+
+**⚠️ FINAL STEP 7/7 - ANSWER REQUIRED**
+
+You have explored the scene. Based on ALL images you've seen:
+- Choose the object that is closest (A, B, C, or D)
+- Set "done": true in your JSON output
+
+
+---
+**OUTPUT FORMAT:**
+
+Think step-by-step:
+1. What do I see in the current image?
+2. What objects from the question have I found? What's still missing?
+3. Where should I move next to find them?
+
+Then output JSON:
+```json
+{
+  "rotation_angle_degrees": <-90 to 90>,
+  "forward_meters": <-1.0 to 1.0>,
+  "left_meters": <-0.5 to 0.5>,
+  "z_delta_meters": <-0.3 to 0.3>,
+  "answer": <"A"/"B"/"C"/"D" or null>,
+  "done": <true/false>
+}
+```
+
+
+================================================================================
+EXAMPLE 3: OBJECT DIRECTION (HARD) - EXPLORATION (Step 1/7)
+================================================================================
+
+You are an embodied agent exploring a 3D room to answer a spatial reasoning question.
+
+**Your Position & Room Bounds:**
+- Room dimensions: 4.7m (X) x 5.6m (Y)
+- X range: [0.50, 5.20] meters
+- Y range: [0.80, 6.40] meters  
+- **Your current position:** X=2.50m, Y=3.10m, Z=1.60m
+
+---
+**TASK: Relative Direction**
+You need to determine the direction of one object relative to another FROM A SPECIFIC VIEWPOINT.
+- First, locate WHERE you would be standing (e.g., "standing by the stove")
+- Then, determine which direction you would be FACING (e.g., "facing the tv")  
+- From that perspective, determine where the TARGET object is (left/right/front-left/etc.)
+- Mentally place yourself at that position and orientation
+
+**Question:** You are standing by the stove facing the tv. What direction is the sofa relative to you?
+
+**Answer Options:**
+A. left
+B. right
+C. back
+D. front
+
+Step 1/7 - Combine rotation AND movement to explore efficiently!
+
+---
+
+**STEP 1/7 - EXPLORATION PHASE (6 steps remaining)**
+
+🎯 **What to do this step:**
+1. Look at the current image - what objects/features do you see?
+2. Identify which objects from the question are visible (if any)
+3. Plan where to move next to find missing objects or get better views
+4. Execute BOTH rotation AND translation to reach new areas
+
+⚙️ **Movement Controls** (rotation FIRST, then translation in new direction):
+- **rotation_angle_degrees**: -90 to +90 (negative=right, positive=left)
+- **forward_meters**: -1.0 to +1.0 (walk forward/back in your facing direction)
+- **left_meters**: -0.5 to +0.5 (strafe left/right perpendicular to facing)
+
+📐 **Examples:**
+- Turn left and approach: {"rotation_angle_degrees": 60, "forward_meters": 0.8, "left_meters": 0.0, ...}
+- Turn around and move: {"rotation_angle_degrees": 180, "forward_meters": 0.6, "left_meters": 0.0, ...}
+- Strafe right while moving: {"rotation_angle_degrees": 0, "forward_meters": 0.7, "left_meters": -0.3, ...}
+- Small adjustment: {"rotation_angle_degrees": 15, "forward_meters": 0.3, "left_meters": 0.1, ...}
+- Large movement to opposite corner: {"rotation_angle_degrees": -45, "forward_meters": 1.0, "left_meters": 0.0, ...}
+
+⚠️ **Critical: ACTUALLY MOVE!**
+- Prefer combining rotation + forward movement in each step
+- Don't just rotate in place (rotation=90, forward=0) - you'll stay in the same spot!
+- The room is approximately 4.7m x 5.6m. Cover different areas efficiently to find all relevant objects.
+
+❌ **Do NOT answer yet** unless you've seen all objects mentioned in the question!
+
+
+---
+**OUTPUT FORMAT:**
+
+Think step-by-step:
+1. What do I see in the current image?
+2. What objects from the question have I found? What's still missing?
+3. Where should I move next to find them?
+
+Then output JSON:
+```json
+{
+  "rotation_angle_degrees": <-90 to 90>,
+  "forward_meters": <-1.0 to 1.0>,
+  "left_meters": <-0.5 to 0.5>,
+  "z_delta_meters": <-0.3 to 0.3>,
+  "answer": <"A"/"B"/"C"/"D" or null>,
+  "done": <true/false>
+}
+```
+
+
+================================================================================
+KEY DIFFERENCES BETWEEN QUESTION TYPES:
+================================================================================
+
+1. TASK DESCRIPTION varies:
+   - Route Planning: Focus on tracing navigation paths and turn sequences
+   - Object Distance: Focus on finding all candidates and comparing distances
+   - Object Direction: Focus on mental perspective-taking from a specific viewpoint
+
+2. ANSWER HINT varies:
+   - Route Planning: "Choose the correct sequence of turns"
+   - Object Distance: "Choose the object that is closest"
+   - Object Direction (easy): "Choose: left or right"
+   - Object Direction (medium): "Choose: left, right, or back"
+   - Object Direction (hard): "Choose: front-left, front-right, back-left, or back-right"
+
+3. Rest of prompt is IDENTICAL across all question types
+
+4. EXPLORATION vs FINAL STEP:
+   - Exploration: Detailed movement instructions + examples + warnings
+   - Final step: Simple "answer now" instruction

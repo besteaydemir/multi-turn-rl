@@ -8,6 +8,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import numpy as np
 from pathlib import Path
+from datasets import load_dataset
 
 # Set style for better-looking plots
 sns.set_style("whitegrid")
@@ -23,6 +24,10 @@ files = [
     base_path / "20260101_235632_sequential_split2of4" / "results.csv",
     base_path / "20260101_235633_sequential_split3of4" / "results.csv",
     base_path / "20260101_235633_sequential_split4of4" / "results.csv",
+    base_path / "20260114_114232_sequential_split1of4" / "results.csv",
+    base_path / "20260114_114232_sequential_split2of4" / "results.csv",
+    base_path / "20260114_114306_sequential_split3of4" / "results.csv",
+    base_path / "20260114_114306_sequential_split4of4" / "results.csv",
 ]
 
 # Read and combine all CSV files
@@ -37,6 +42,19 @@ for i, file_path in enumerate(files, 1):
 combined_df = pd.concat(dfs, ignore_index=True)
 print(f"\nCombined dataset: {len(combined_df)} rows")
 print(f"Question types: {combined_df['question_type'].unique()}")
+
+# Load VSI-Bench to get dataset information for each scene
+print("\n[INFO] Loading VSI-Bench dataset to map scenes to datasets...")
+vsi = load_dataset("nyu-visionx/VSI-Bench", split="test")
+vsi_df = pd.DataFrame(vsi)
+# Keep scene_name as string and convert to int only if possible
+scene_to_dataset = dict(zip(vsi_df['scene_name'], vsi_df['dataset']))
+
+# Add dataset column to combined_df (convert scene_id to string for matching)
+combined_df['scene_id_str'] = combined_df['scene_id'].astype(str)
+combined_df['dataset'] = combined_df['scene_id_str'].map(scene_to_dataset)
+print(f"[INFO] Mapped {combined_df['dataset'].notna().sum()} / {len(combined_df)} scenes to datasets")
+print(f"[INFO] Unique datasets: {sorted(combined_df['dataset'].dropna().unique())}")
 
 # Calculate accuracy for each question type
 def calculate_accuracy(df):
@@ -86,6 +104,63 @@ print(f"Accuracy (answered only): {combined_obj_rel_accuracy_answered_only:.2f}%
 combined_df['question_type_grouped'] = combined_df['question_type'].apply(
     lambda x: 'object_rel_direction_combined' if x in obj_rel_types else x
 )
+
+# Crosstab analysis by dataset and question type
+print("\n" + "="*80)
+print("QUESTION TYPES BY DATASET (from evaluated results)")
+print("="*80)
+crosstab = pd.crosstab(combined_df['dataset'], combined_df['question_type_grouped'], margins=True, margins_name='Total')
+print(crosstab.to_string())
+
+# Accuracy by dataset and question type
+print("\n" + "="*80)
+print("ACCURACY BY DATASET AND QUESTION TYPE")
+print("="*80)
+accuracy_by_dataset_type = combined_df.groupby(['dataset', 'question_type_grouped']).apply(
+    lambda x: pd.Series({
+        'total': len(x),
+        'answered': (x['model_answer'] != 'NO_ANSWER').sum(),
+        'no_answer': (x['model_answer'] == 'NO_ANSWER').sum(),
+        'correct': (x['gt_answer'] == x['model_answer']).sum(),
+        'accuracy_all': calculate_accuracy(x),
+        'accuracy_answered_only': calculate_accuracy(x[x['model_answer'] != 'NO_ANSWER']) if (x['model_answer'] != 'NO_ANSWER').sum() > 0 else 0.0,
+    })
+).round(2)
+print(accuracy_by_dataset_type.to_string())
+
+# Overall accuracy by dataset
+print("\n" + "="*80)
+print("OVERALL ACCURACY BY DATASET")
+print("="*80)
+accuracy_by_dataset = combined_df.groupby('dataset').apply(
+    lambda x: pd.Series({
+        'total': len(x),
+        'answered': (x['model_answer'] != 'NO_ANSWER').sum(),
+        'no_answer': (x['model_answer'] == 'NO_ANSWER').sum(),
+        'correct': (x['gt_answer'] == x['model_answer']).sum(),
+        'accuracy_all': calculate_accuracy(x),
+        'accuracy_answered_only': calculate_accuracy(x[x['model_answer'] != 'NO_ANSWER']) if (x['model_answer'] != 'NO_ANSWER').sum() > 0 else 0.0,
+    })
+).round(2)
+print(accuracy_by_dataset.to_string())
+
+# Overall summary
+print("\n" + "="*80)
+print("OVERALL SUMMARY")
+print("="*80)
+total_questions = len(combined_df)
+total_answered = (combined_df['model_answer'] != 'NO_ANSWER').sum()
+total_no_answer = (combined_df['model_answer'] == 'NO_ANSWER').sum()
+total_correct = (combined_df['gt_answer'] == combined_df['model_answer']).sum()
+overall_accuracy_all = calculate_accuracy(combined_df)
+overall_accuracy_answered = calculate_accuracy(combined_df[combined_df['model_answer'] != 'NO_ANSWER']) if total_answered > 0 else 0.0
+
+print(f"Total rows in combined CSVs: {total_questions}")
+print(f"Questions answered: {total_answered} ({(total_answered/total_questions*100):.2f}%)")
+print(f"Questions attempted but resulted in NO_ANSWER: {total_no_answer} ({(total_no_answer/total_questions*100):.2f}%)")
+print(f"Questions answered correctly: {total_correct}")
+print(f"\nAccuracy (all questions): {overall_accuracy_all:.2f}%")
+print(f"Accuracy (answered only): {overall_accuracy_answered:.2f}%")
 
 # Summary statistics
 print("\n" + "="*80)
@@ -283,6 +358,21 @@ plt.tight_layout()
 plt.savefig(output_dir / 'accuracy_by_type_answered_only_combined.png', dpi=300, bbox_inches='tight')
 print(f"Saved: {output_dir / 'accuracy_by_type_answered_only_combined.png'}")
 plt.close()
+
+# Save crosstab by dataset and question type
+crosstab_file = output_dir / 'question_types_by_dataset.csv'
+crosstab.to_csv(crosstab_file)
+print(f"\nSaved crosstab to: {crosstab_file}")
+
+# Save accuracy by dataset and question type
+accuracy_dataset_type_file = output_dir / 'accuracy_by_dataset_and_type.csv'
+accuracy_by_dataset_type.to_csv(accuracy_dataset_type_file)
+print(f"Saved accuracy by dataset and type to: {accuracy_dataset_type_file}")
+
+# Save accuracy by dataset
+accuracy_dataset_file = output_dir / 'accuracy_by_dataset.csv'
+accuracy_by_dataset.to_csv(accuracy_dataset_file)
+print(f"Saved accuracy by dataset to: {accuracy_dataset_file}")
 
 # Save summary CSV
 summary_output = output_dir / 'summary_statistics.csv'
