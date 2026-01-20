@@ -1,34 +1,119 @@
 #!/usr/bin/env python3
 """
-Analysis script for combining and visualizing results from three experimental splits.
+Analysis script for combining and visualizing results from experimental splits.
+Automatically finds the latest experiment runs and reads question types from sequential.py.
 """
 
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 import numpy as np
+import re
 from pathlib import Path
 from datasets import load_dataset
+from datetime import datetime
 
 # Set style for better-looking plots
 sns.set_style("whitegrid")
 plt.rcParams['figure.figsize'] = (15, 10)
 
-# Define file paths
+# ----------------- Auto-detect latest experiments -----------------
+def parse_question_types_from_sequential():
+    """Parse question types from sequential.py to match what's being evaluated."""
+    sequential_path = Path("/dss/dsshome1/06/di38riq/rl_multi_turn/evaluation/sequential.py")
+    if not sequential_path.exists():
+        print("[WARN] Could not find sequential.py, using default question types")
+        return ["route_planning", "object_rel_distance", "object_rel_direction_easy", 
+                "object_rel_direction_medium", "object_rel_direction_hard"]
+    
+    with open(sequential_path, "r") as f:
+        content = f.read()
+    
+    # Find the mca_types list in load_vsi_bench_questions function
+    pattern = r'mca_types\s*=\s*\[(.*?)\]'
+    match = re.search(pattern, content, re.DOTALL)
+    if match:
+        types_str = match.group(1)
+        # Extract quoted strings
+        types = re.findall(r'["\']([^"\']+)["\']', types_str)
+        print(f"[INFO] 📋 Question types from sequential.py: {types}")
+        return types
+    
+    print("[WARN] Could not parse question types, using defaults")
+    return ["route_planning", "object_rel_distance", "object_rel_direction_easy", 
+            "object_rel_direction_medium", "object_rel_direction_hard"]
+
+def find_latest_experiment_splits(base_path, min_splits=2):
+    """Find the latest set of experiment splits (e.g., split1of5, split2of5, etc.)."""
+    exp_dirs = list(base_path.glob("*_sequential_split*"))
+    
+    # Group by date and total_splits (ignore time for grouping)
+    experiments = {}
+    for exp_dir in exp_dirs:
+        match = re.match(r'(\d{8})_\d{6}_sequential_split(\d+)of(\d+)', exp_dir.name)
+        if match:
+            date, split_num, total_splits = match.groups()
+            # Group by date + total_splits to handle job arrays starting at slightly different times
+            group_key = f"{date}_split{total_splits}"
+            if group_key not in experiments:
+                experiments[group_key] = {'date': date, 'splits': {}, 'total_splits': int(total_splits)}
+            experiments[group_key]['splits'][int(split_num)] = exp_dir
+    
+    # Find the most recent complete or in-progress experiment
+    best_experiment = None
+    best_score = ('', 0)  # (date, num_splits)
+    
+    for group_key in experiments.keys():
+        exp_info = experiments[group_key]
+        date = exp_info['date']
+        splits = exp_info['splits']
+        total_splits = exp_info['total_splits']
+        num_splits = len(splits)
+        
+        # Score: prioritize more recent date, then more splits
+        score = (date, num_splits)
+        
+        if num_splits >= min_splits and score > best_score:
+            best_score = score
+            best_experiment = (date, splits, total_splits)
+    
+    if best_experiment:
+        date, splits, total_splits = best_experiment
+        # Convert splits dict to the expected format
+        splits_info = {}
+        for split_num, exp_dir in splits.items():
+            splits_info[split_num] = {
+                'dir': exp_dir,
+                'total_splits': total_splits
+            }
+        print(f"\n[INFO] 🔍 Found experiment: {date} with {len(splits_info)}/{total_splits} splits")
+        return date, splits_info, total_splits
+    
+    print("[ERROR] No experiment splits found!")
+    return None, {}, 0
+
+# Find latest experiments
 base_path = Path("/dss/dsshome1/06/di38riq/rl_multi_turn/experiment_logs")
-files = [
-    base_path / "20251225_002135_sequential_split1of3" / "results.csv",
-    base_path / "20251225_002137_sequential_split2of3" / "results.csv",
-    base_path / "20251225_002139_sequential_split3of3" / "results.csv",
-    base_path / "20260101_235631_sequential_split1of4" / "results.csv",
-    base_path / "20260101_235632_sequential_split2of4" / "results.csv",
-    base_path / "20260101_235633_sequential_split3of4" / "results.csv",
-    base_path / "20260101_235633_sequential_split4of4" / "results.csv",
-    base_path / "20260114_114232_sequential_split1of4" / "results.csv",
-    base_path / "20260114_114232_sequential_split2of4" / "results.csv",
-    base_path / "20260114_114306_sequential_split3of4" / "results.csv",
-    base_path / "20260114_114306_sequential_split4of4" / "results.csv",
-]
+exp_timestamp, splits_info, total_splits = find_latest_experiment_splits(base_path)
+
+if not splits_info:
+    print("No experiments found. Exiting.")
+    exit(1)
+
+# Load results from all available splits
+print(f"\n[INFO] 📂 Loading results from {len(splits_info)} splits...")
+files = []
+for split_num in sorted(splits_info.keys()):
+    csv_path = splits_info[split_num]['dir'] / "results.csv"
+    if csv_path.exists():
+        files.append(csv_path)
+        print(f"  ✓ Split {split_num}: {csv_path}")
+    else:
+        print(f"  ✗ Split {split_num}: No results.csv yet")
+
+if not files:
+    print("[ERROR] No results.csv files found!")
+    exit(1)
 
 # Read and combine all CSV files
 dfs = []
@@ -36,12 +121,12 @@ for i, file_path in enumerate(files, 1):
     df = pd.read_csv(file_path)
     df['split'] = f'split{i}'
     dfs.append(df)
-    print(f"Loaded {file_path.name}: {len(df)} rows")
+    print(f"[INFO] Loaded {file_path.name}: {len(df)} rows")
 
 # Combine all dataframes
 combined_df = pd.concat(dfs, ignore_index=True)
-print(f"\nCombined dataset: {len(combined_df)} rows")
-print(f"Question types: {combined_df['question_type'].unique()}")
+print(f"\n[INFO] Combined dataset: {len(combined_df)} rows")
+print(f"[INFO] Question types: {sorted(combined_df['question_type'].unique())}")
 
 # Load VSI-Bench to get dataset information for each scene
 print("\n[INFO] Loading VSI-Bench dataset to map scenes to datasets...")
@@ -56,6 +141,36 @@ combined_df['dataset'] = combined_df['scene_id_str'].map(scene_to_dataset)
 print(f"[INFO] Mapped {combined_df['dataset'].notna().sum()} / {len(combined_df)} scenes to datasets")
 print(f"[INFO] Unique datasets: {sorted(combined_df['dataset'].dropna().unique())}")
 
+# ----------------- Progress Tracking -----------------
+# Get question types from sequential.py to calculate total expected questions
+question_types_from_code = parse_question_types_from_sequential()
+
+print("\n[INFO] 🔢 Calculating total expected questions...")
+vsi = load_dataset("nyu-visionx/VSI-Bench", split="test")
+filtered_vsi = vsi.filter(
+    lambda x: x["dataset"] == "arkitscenes" and x["question_type"] in question_types_from_code
+)
+total_expected = len(filtered_vsi)
+completed_count = len(combined_df)
+remaining_count = total_expected - completed_count
+
+print("\n" + "="*80)
+print("📊 PROGRESS SUMMARY")
+print("="*80)
+print(f"Experiment: {exp_timestamp}")
+print(f"Splits running: {len(splits_info)}/{total_splits}")
+print(f"Questions completed: {completed_count} / {total_expected}")
+print(f"Questions remaining: {remaining_count}")
+print(f"Progress: {100*completed_count/total_expected:.1f}%")
+print()
+for split_num in sorted(splits_info.keys()):
+    csv_path = splits_info[split_num]['dir'] / "results.csv"
+    if csv_path.exists():
+        split_df = pd.read_csv(csv_path)
+        print(f"  Split {split_num}: {len(split_df)} questions completed")
+    else:
+        print(f"  Split {split_num}: Not started yet")
+
 # Calculate accuracy for each question type
 def calculate_accuracy(df):
     """Calculate accuracy, handling NO_ANSWER cases."""
@@ -67,20 +182,43 @@ def calculate_accuracy(df):
 
 # Overall accuracy by question type
 print("\n" + "="*80)
-print("ACCURACY BY QUESTION TYPE")
+print("CURRENT ACCURACY BY QUESTION TYPE")
 print("="*80)
 accuracy_by_type = combined_df.groupby('question_type').apply(
     lambda x: pd.Series({
-        'accuracy': calculate_accuracy(x),
-        'count': len(x),
+        'total': len(x),
         'correct': (x['gt_answer'] == x['model_answer']).sum(),
         'no_answer': (x['model_answer'] == 'NO_ANSWER').sum(),
         'answered': (x['model_answer'] != 'NO_ANSWER').sum(),
-        'accuracy_answered_only': calculate_accuracy(x[x['model_answer'] != 'NO_ANSWER']) if (x['model_answer'] != 'NO_ANSWER').sum() > 0 else 0.0
+        'accuracy_all': calculate_accuracy(x),
+        'accuracy_answered_only': calculate_accuracy(x[x['model_answer'] != 'NO_ANSWER']) if (x['model_answer'] != 'NO_ANSWER').sum() > 0 else 0.0,
+        'success_rate': 100 * (x['model_answer'] != 'NO_ANSWER').sum() / len(x) if len(x) > 0 else 0.0
     })
 ).round(2)
 
 print(accuracy_by_type.to_string())
+
+# Overall summary
+print("\n" + "="*80)
+print("OVERALL CURRENT PERFORMANCE")
+print("="*80)
+total_questions = len(combined_df)
+total_correct = (combined_df['gt_answer'] == combined_df['model_answer']).sum()
+total_answered = (combined_df['model_answer'] != 'NO_ANSWER').sum()
+total_no_answer = (combined_df['model_answer'] == 'NO_ANSWER').sum()
+
+overall_accuracy = calculate_accuracy(combined_df)
+answered_only_df = combined_df[combined_df['model_answer'] != 'NO_ANSWER']
+accuracy_answered_only = calculate_accuracy(answered_only_df) if len(answered_only_df) > 0 else 0.0
+success_rate = 100 * total_answered / total_questions if total_questions > 0 else 0.0
+
+print(f"Total evaluated: {total_questions}")
+print(f"Correct answers: {total_correct}")
+print(f"Questions answered (not NO_ANSWER): {total_answered} ({success_rate:.1f}%)")
+print(f"NO_ANSWER count: {total_no_answer}")
+print(f"\nOverall accuracy (all): {overall_accuracy:.2f}%")
+print(f"Overall accuracy (answered only): {accuracy_answered_only:.2f}%")
+print(f"Success rate (answered/total): {success_rate:.2f}%")
 
 # Combined accuracy for object_rel_direction types
 obj_rel_types = ['object_rel_direction_hard', 'object_rel_direction_medium', 'object_rel_direction_easy']
@@ -255,8 +393,8 @@ plt.close()
 
 # 5. Accuracy bar chart
 fig, ax = plt.subplots(figsize=(12, 6))
-accuracy_data = accuracy_by_type.sort_values('accuracy', ascending=False)
-bars = ax.bar(range(len(accuracy_data)), accuracy_data['accuracy'], 
+accuracy_data = accuracy_by_type.sort_values('accuracy_all', ascending=False)
+bars = ax.bar(range(len(accuracy_data)), accuracy_data['accuracy_all'], 
               color=[color_map[qt] for qt in accuracy_data.index], edgecolor='black', linewidth=1.5)
 
 ax.set_xlabel('Question Type', fontsize=14, fontweight='bold')
@@ -268,7 +406,7 @@ ax.grid(True, axis='y', alpha=0.3)
 
 # Add value labels on bars
 for i, (idx, row) in enumerate(accuracy_data.iterrows()):
-    ax.text(i, row['accuracy'] + 1, f"{row['accuracy']:.1f}%", 
+    ax.text(i, row['accuracy_all'] + 1, f"{row['accuracy_all']:.1f}%", 
             ha='center', va='bottom', fontweight='bold', fontsize=10)
 
 plt.tight_layout()

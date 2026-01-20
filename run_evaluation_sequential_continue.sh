@@ -4,12 +4,12 @@
 #SBATCH --ntasks=8
 #SBATCH --gres=gpu:1
 #SBATCH --mem=64G
-#SBATCH --time=06:30:00
+#SBATCH --time=08:30:00
 #SBATCH --qos=mcml
 #SBATCH --job-name=vsi_seq_continue
 #SBATCH --output=/dss/dsshome1/06/di38riq/rl_multi_turn/logs/vsi_seq_continue%a_%j.out
 #SBATCH --error=/dss/dsshome1/06/di38riq/rl_multi_turn/logs/vsi_seq_continue%a_%j.err
-#SBATCH --array=1-4  # Run splits 1 through 4
+#SBATCH --array=1-5  # Run splits 1 through 5
 
 # =============================================================================
 # VSI-Bench Sequential Evaluation - New Run for Numerical + MCA Questions
@@ -30,32 +30,49 @@
 # =============================================================================
 
 # Configuration
-NUM_SPLITS=4  # Total number of splits
+NUM_SPLITS=5  # Total number of splits
 STEPS=8       # Number of reasoning steps per question
+AUTO_CONTINUE=true  # Set to true to automatically continue from latest experiment
 
-# Map SLURM_ARRAY_TASK_ID to experiment folders
-case $SLURM_ARRAY_TASK_ID in
-    1)
+# Automatically find the latest experiment folder for this split
+SPLIT_NUM=$SLURM_ARRAY_TASK_ID
+
+if [ "$AUTO_CONTINUE" = true ]; then
+    # Find the most recent experiment folder for this split (any date, matching NUM_SPLITS)
+    # This will find folders like: 20260119_013550_sequential_split1of5
+    LATEST_FOLDER=$(ls -td /dss/dsshome1/06/di38riq/rl_multi_turn/experiment_logs/*_sequential_split${SPLIT_NUM}of${NUM_SPLITS} 2>/dev/null | head -1)
+    
+    if [ -n "$LATEST_FOLDER" ] && [ -d "$LATEST_FOLDER" ]; then
+        CONTINUE_DIR="$LATEST_FOLDER"
+        echo "Auto-detected continue folder: $CONTINUE_DIR"
+    else
         CONTINUE_DIR=""
-        SPLIT_NUM=1
-        ;;
-    2)
-        CONTINUE_DIR=""
-        SPLIT_NUM=2
-        ;;
-    3)
-        CONTINUE_DIR=""
-        SPLIT_NUM=3
-        ;;
-    4)
-        CONTINUE_DIR=""
-        SPLIT_NUM=4
-        ;;
-    *)
-        echo "ERROR: Invalid SLURM_ARRAY_TASK_ID: $SLURM_ARRAY_TASK_ID"
-        exit 1
-        ;;
-esac
+        echo "No existing folder found for split $SPLIT_NUM of $NUM_SPLITS, starting fresh"
+    fi
+else
+    # Manual specification (legacy mode) - update these paths as needed
+    case $SLURM_ARRAY_TASK_ID in
+        1)
+            CONTINUE_DIR="experiment_logs/20260119_013550_sequential_split1of5"
+            ;;
+        2)
+            CONTINUE_DIR="experiment_logs/20260119_013638_sequential_split2of5"
+            ;;
+        3)
+            CONTINUE_DIR="experiment_logs/20260119_013653_sequential_split3of5"
+            ;;
+        4)
+            CONTINUE_DIR="experiment_logs/20260119_015245_sequential_split4of5"
+            ;;
+        5)
+            CONTINUE_DIR="experiment_logs/20260119_015847_sequential_split5of5"
+            ;;
+        *)
+            echo "ERROR: Invalid SLURM_ARRAY_TASK_ID: $SLURM_ARRAY_TASK_ID"
+            exit 1
+            ;;
+    esac
+fi
 
 # Create logs directory if it doesn't exist
 mkdir -p /dss/dsshome1/06/di38riq/rl_multi_turn/logs
@@ -68,7 +85,11 @@ echo "Job Array Task ID: $SLURM_ARRAY_TASK_ID"
 echo "Job Name: $SLURM_JOB_NAME"
 echo "Node: $SLURM_NODELIST"
 echo "Split: $SPLIT_NUM of $NUM_SPLITS"
-echo "Mode: Fresh run with numerical + MCA questions"
+if [ -n "$CONTINUE_DIR" ]; then
+    echo "Mode: Continue from $CONTINUE_DIR"
+else
+    echo "Mode: Fresh run"
+fi
 echo "Starting time: $(date)"
 echo "=========================================="
 

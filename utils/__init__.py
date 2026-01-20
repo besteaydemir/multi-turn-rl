@@ -27,9 +27,24 @@ from .data import (
     sky_direction_to_up_vector,
     get_sky_direction_for_scene,
     load_vsi_bench_questions,
+    MCA_QUESTION_TYPES,
 )
 from .common import (
     timestamp_str,
+)
+from .mesh import (
+    find_mesh_file,
+    load_mesh_cached,
+    clear_mesh_cache,
+    get_mesh_bounds,
+)
+from .evaluation import (
+    calculate_mra,
+    evaluate_answer,
+    compute_accuracy_by_type,
+)
+from .visualization import (
+    render_birds_eye_view_with_path,
 )
 
 __all__ = [
@@ -57,6 +72,18 @@ __all__ = [
     "sky_direction_to_up_vector",
     "get_sky_direction_for_scene",
     "load_vsi_bench_questions",
+    "MCA_QUESTION_TYPES",
     # common
     "timestamp_str",
+    # mesh
+    "find_mesh_file",
+    "load_mesh_cached",
+    "clear_mesh_cache",
+    "get_mesh_bounds",
+    # evaluation
+    "calculate_mra",
+    "evaluate_answer",
+    "compute_accuracy_by_type",
+    # visualization
+    "render_birds_eye_view_with_path",
 ]

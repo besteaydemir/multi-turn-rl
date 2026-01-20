@@ -125,9 +125,9 @@ def parse_rotation_angle(angle_degrees, R_current):
         return np.array(R_current, dtype=float)
 
 
-def apply_movement_in_camera_frame(R_current, t_current, forward_m, left_m, z_delta_m):
+def apply_movement_in_camera_frame(R_current, t_current, forward_m, left_m, z_delta_m, bbox_mins=None, bbox_maxs=None):
     """
-    Apply movement relative to the camera's current frame.
+    Apply movement relative to the camera's current frame, optionally clamped to room bounds.
     
     Args:
         R_current: 3x3 rotation matrix
@@ -135,6 +135,8 @@ def apply_movement_in_camera_frame(R_current, t_current, forward_m, left_m, z_de
         forward_m: Forward movement in meters
         left_m: Left movement in meters
         z_delta_m: Vertical movement in meters
+        bbox_mins: Optional minimum bounds [x, y, z] for clamping
+        bbox_maxs: Optional maximum bounds [x, y, z] for clamping
     
     Returns:
         Updated 3x1 translation vector
@@ -155,6 +157,14 @@ def apply_movement_in_camera_frame(R_current, t_current, forward_m, left_m, z_de
         movement[2] += z_delta_m
         
         t_new = t + movement
+        
+        # Clamp to room bounds if provided (with small margin)
+        if bbox_mins is not None and bbox_maxs is not None:
+            margin = 0.1  # 10cm margin from walls
+            t_new[0] = np.clip(t_new[0], bbox_mins[0] + margin, bbox_maxs[0] - margin)
+            t_new[1] = np.clip(t_new[1], bbox_mins[1] + margin, bbox_maxs[1] - margin)
+            t_new[2] = np.clip(t_new[2], bbox_mins[2] + 0.3, bbox_maxs[2] - 0.3)  # Stay off floor/ceiling
+        
         return t_new
     except Exception as e:
         print(f"[WARN] Failed to apply movement: {e}")
