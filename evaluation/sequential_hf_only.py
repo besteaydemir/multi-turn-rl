@@ -1,18 +1,11 @@
 #!/usr/bin/env python3
 """
-Sequential pipeline with job splitting support and vLLM/HuggingFace backend options:
+Sequential pipeline with job splitting support:
  - Load VSI-Bench questions (arkitscenes + multiple choice types)
  - Support splitting questions across multiple jobs (--split N --num-splits M)
  - For each question, run Qwen3-VL multimodal reasoning loop sequentially
  - Collect answers and evaluate against ground truth
- - Supports both HuggingFace (default) and vLLM (faster) backends
- 
-Usage:
-  # Original HuggingFace backend (sequential, same as before)
-  python sequential.py --backend hf --split 1 --num-splits 4
-  
-  # vLLM backend (faster, batched inference)
-  python sequential.py --backend vllm --split 1 --num-splits 4
+ - NO batching - all inference is sequential
 """
 
 import argparse
@@ -25,6 +18,9 @@ import numpy as np
 import pandas as pd
 import torch
 from PIL import Image
+
+from transformers import Qwen3VLForConditionalGeneration, AutoProcessor
+from qwen_vl_utils import process_vision_info
 
 # Import utilities from the utils package
 import sys
@@ -43,8 +39,8 @@ from utils import (
     load_mesh_cached,
     get_mesh_bounds,
     calculate_mra,
+    render_birds_eye_view_with_path,
     MCA_QUESTION_TYPES,
-    create_inference_backend,
 )
 from utils.data import load_vsi_bench_questions as _load_vsi_bench_questions
 
@@ -61,9 +57,17 @@ CAM_HEIGHT = 1.6
 # Initial view selection configuration
 INITIAL_VIEW_SELECTION_METRIC = "qwen"  # "visibility", "laplacian", or "qwen"
 
-# Global inference backend (set in main)
-inference_backend = None
+# --------------- Qwen model init ----------------
 device = "cuda" if torch.cuda.is_available() else "cpu"
+
+print(f"[INFO] Loading Qwen3 model on device: {device}")
+model = Qwen3VLForConditionalGeneration.from_pretrained(
+    MODEL_ID, dtype="auto", device_map="auto", cache_dir=CACHE_DIR
+)
+processor = AutoProcessor.from_pretrained(MODEL_ID, cache_dir=CACHE_DIR)
+processor.tokenizer.padding_side = 'left'
+model.to(device)
+print("[INFO] Qwen3 model loaded.")
 
 
 # ----------------- Prompt Builder (kept in main file as requested) -----------------
@@ -272,7 +276,6 @@ def _format_movement_history(movement_history):
 # ----------------- Qwen-based View Selection -----------------
 def select_initial_view_with_qwen(view_image_paths, question, choices, question_type):
     """Use Qwen to select the best initial view based on the question."""
-    global inference_backend
     print("[INFO] 🤖 Using Qwen to select best initial view...")
     
     prompt_intro = f"""You are looking at a 3D room scene from 4 different angles.
@@ -310,8 +313,24 @@ Respond with ONLY a JSON object:
     
     messages = [{"role": "user", "content": content}]
     
-    # Use the inference backend
-    output_text = inference_backend.generate(messages, max_new_tokens=256)
+    # Apply chat template and run inference
+    text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+    image_inputs, video_inputs = process_vision_info(messages)
+    
+    inputs = processor(
+        text=[text],
+        images=image_inputs,
+        videos=video_inputs,
+        padding=True,
+        return_tensors="pt",
+    )
+    inputs = {k: v.to(device) for k, v in inputs.items()}
+    
+    with torch.no_grad(), torch.cuda.amp.autocast(dtype=torch.float16):
+        generated_ids = model.generate(**inputs, max_new_tokens=256, do_sample=False)
+    
+    generated_ids_trimmed = [out_ids[len(in_ids):] for in_ids, out_ids in zip(inputs['input_ids'], generated_ids)]
+    output_text = processor.batch_decode(generated_ids_trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=True)[0]
     
     print(f"[INFO] 🤖 Qwen view selection response: {output_text[:200]}...")
     
@@ -444,8 +463,26 @@ def run_single_question(mesh_path, question, choices, question_id, experiment_ba
         with open(step_folder / "qwen_input_prompt.txt", "w", encoding="utf-8") as f:
             f.write(full_prompt)
 
-        # Use the inference backend (works for both HF and vLLM)
-        output_text = inference_backend.generate(messages, max_new_tokens=1024)
+        # Apply chat template
+        text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        image_inputs, video_inputs = process_vision_info(messages)
+
+        inputs = processor(
+            text=[text],
+            images=image_inputs,
+            videos=video_inputs,
+            padding=True,
+            return_tensors="pt",
+        )
+        inputs = {k: v.to(device) for k, v in inputs.items()}
+
+        # Sequential inference with FP16
+        with torch.no_grad(), torch.cuda.amp.autocast(dtype=torch.float16):
+            generated_ids = model.generate(**inputs, max_new_tokens=1024, do_sample=False)
+
+        generated_ids_trimmed = [out_ids[len(in_ids):] for in_ids, out_ids in zip(inputs['input_ids'], generated_ids)]
+        output_texts = processor.batch_decode(generated_ids_trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=True)
+        output_text = output_texts[0]
 
         with open(step_folder / "qwen_raw_output.txt", "w", encoding="utf-8") as f:
             f.write(output_text)
@@ -486,67 +523,38 @@ def run_single_question(mesh_path, question, choices, question_id, experiment_ba
                 "z_delta": z_delta_m,
                 "position": f"X={t_new[0]:.2f}m, Y={t_new[1]:.2f}m, Z={t_new[2]:.2f}m"
             })
-            
-            # Render next image
-            img_next = base_out / f"render_{step+1:02d}.png"
-            render_mesh_from_pose(mesh, next_pose, img_next, fxfy=DEFAULT_FX_FY, image_wh=IMAGE_WH)
-
-            image_history.append(str(img_next))
-            cam_history.append(next_pose)
-            R_current = next_pose[:3, :3]
-            t_current = next_pose[:3, 3]
         else:
-            # No valid movement parsed - skip rendering new image this step
-            print(f"[Q{question_id:03d}] ⚠️  No valid movement parsed at step {step}, skipping render")
+            # Default movement if parsing fails
+            last = cam_history[-1]
+            angle = 10.0 * np.pi / 180.0
+            Rz = np.array([[np.cos(angle), -np.sin(angle), 0.0], 
+                          [np.sin(angle), np.cos(angle), 0.0], 
+                          [0.0, 0.0, 1.0]])
+            next_pose = last.copy()
+            next_pose[:3, :3] = Rz @ next_pose[:3, :3]
+
+        # Render next image
+        img_next = base_out / f"render_{step+1:02d}.png"
+        render_mesh_from_pose(mesh, next_pose, img_next, fxfy=DEFAULT_FX_FY, image_wh=IMAGE_WH)
+
+        image_history.append(str(img_next))
+        cam_history.append(next_pose)
+        R_current = next_pose[:3, :3]
+        t_current = next_pose[:3, 3]
 
     elapsed_time = time.time() - start_time
     print(f"\n[Q{question_id:03d}] ⏱️  Completed in {elapsed_time:.2f}s")
     print(f"[Q{question_id:03d}] Final answer: {final_answer}")
 
-    # Save camera poses and trajectory data
-    for pose_idx, pose in enumerate(cam_history):
-        pose_file = base_out / f"cam_pose_{pose_idx:02d}.npy"
-        save_matrix(pose_file, pose)
-    
-    # Save trajectory JSON for visualization
-    trajectory_data = {
-        "poses": [
-            {
-                "file": f"cam_pose_{i:02d}.npy",
-                "position": pose[:3, 3].tolist(),
-                "rotation": pose[:3, :3].tolist(),
-                "matrix": pose.tolist()
-            }
-            for i, pose in enumerate(cam_history)
-        ],
-        "num_poses": len(cam_history),
-        "question_id": question_id,
-        "scene_id": scene_id,
-        "question": question,
-        "choices": choices,
-        "final_answer": final_answer,
-        "question_type": question_type,
-        "elapsed_time": elapsed_time,
-        "num_steps": len(image_history) - 1,
-    }
-    
-    with open(base_out / "trajectory.json", "w") as f:
-        json.dump(trajectory_data, f, indent=2)
-    
-    # Save question results
-    results_data = {
-        "question_id": f"q{question_id:03d}",
-        "scene_id": scene_id,
-        "question": question,
-        "choices": choices,
-        "question_type": question_type,
-        "model_answer": final_answer,
-        "elapsed_time": elapsed_time,
-        "num_steps": len(image_history) - 1,
-        "num_poses": len(cam_history),
-    }
-    with open(base_out / "results.json", "w") as f:
-        json.dump(results_data, f, indent=2)
+    # Render bird's eye view with path (for small tests or every 10th question)
+    enable_viz = (max_questions and max_questions <= 100) or (question_id % 10 == 0) or (question_id <= 5)
+    if enable_viz:
+        birds_eye_path = base_out / "birds_eye_view_path.png"
+        try:
+            print(f"[Q{question_id:03d}] 🗺️  Rendering trajectory visualization...")
+            render_birds_eye_view_with_path(mesh, cam_history, birds_eye_path)
+        except Exception as e:
+            print(f"[WARN] Failed to render bird's eye view: {e}")
 
     return final_answer, elapsed_time, len(image_history) - 1
 
@@ -760,23 +768,8 @@ def main_sequential_split(mesh_base_dir=MESH_BASE_DIR, num_steps_per_question=NU
     print(f"[INFO] 🏁 CSV saved to: {csv_file}")
 
 
-def initialize_backend(backend_type: str = "hf"):
-    """Initialize the global inference backend."""
-    global inference_backend
-    
-    print(f"\n[INFO] Initializing {backend_type.upper()} inference backend...")
-    inference_backend = create_inference_backend(
-        backend=backend_type,
-        model_id=MODEL_ID,
-        cache_dir=CACHE_DIR,
-    )
-    print(f"[INFO] {backend_type.upper()} backend ready.\n")
-
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run VSI-Bench reasoning loop (sequential, with job splitting)")
-    parser.add_argument("--backend", type=str, default="hf", choices=["hf", "vllm"],
-                       help="Inference backend: 'hf' (HuggingFace, default) or 'vllm' (faster)")
     parser.add_argument("--steps", type=int, default=NUM_STEPS, help="Number of reasoning steps per question")
     parser.add_argument("--split", type=int, default=1, help="Which split to run (1-indexed)")
     parser.add_argument("--num-splits", type=int, default=1, help="Total number of splits")
@@ -789,9 +782,6 @@ if __name__ == "__main__":
     if not args.test and (args.split < 1 or args.split > args.num_splits):
         print(f"[ERROR] Invalid split: {args.split}. Must be between 1 and {args.num_splits}")
         exit(1)
-
-    # Initialize the inference backend
-    initialize_backend(args.backend)
 
     if args.test:
         print(f"[INFO] Running in test mode (5 questions)")

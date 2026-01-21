@@ -46,6 +46,12 @@ from .evaluation import (
 from .visualization import (
     render_birds_eye_view_with_path,
 )
+from .inference import (
+    InferenceBackend,
+    HuggingFaceBackend,
+    VLLMBackend,
+    create_inference_backend,
+)
 
 __all__ = [
     # rendering
@@ -86,4 +92,9 @@ __all__ = [
     "compute_accuracy_by_type",
     # visualization
     "render_birds_eye_view_with_path",
+    # inference backends
+    "InferenceBackend",
+    "HuggingFaceBackend",
+    "VLLMBackend",
+    "create_inference_backend",
 ]

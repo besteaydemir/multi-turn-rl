@@ -25,6 +25,7 @@ wandb/
 analysis/outputs/
 test/
 tmp*/
+evaluation/compare_logs/
 
 # Data files
 *.ply
