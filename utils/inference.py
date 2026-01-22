@@ -226,7 +226,7 @@ class VLLMBackend(InferenceBackend):
             download_dir=cache_dir,
             # Pitfall #2: Disable video to save memory (we only use images)
             # Setting video=0 prevents allocating memory for video embeddings
-            limit_mm_per_prompt={"image": 15, "video": 0},
+            limit_mm_per_prompt={"image": 16, "video": 0},
             # Pitfall #2 & #3: Match HF processor settings for consistent preprocessing
             # These pixel settings must match what HF uses to get identical outputs
             mm_processor_kwargs={
