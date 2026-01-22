@@ -15,6 +15,15 @@ Usage:
   python sequential.py --backend vllm --split 1 --num-splits 4
 """
 
+# CRITICAL: Set multiprocessing start method to 'spawn' BEFORE importing torch/CUDA
+# This fixes: "Cannot re-initialize CUDA in forked subprocess"
+import multiprocessing
+if __name__ == "__main__":
+    try:
+        multiprocessing.set_start_method('spawn', force=True)
+    except RuntimeError:
+        pass  # Already set
+
 import argparse
 import json
 import time
@@ -53,7 +62,7 @@ CACHE_DIR = "/dss/dssmcmlfs01/pn34sa/pn34sa-dss-0000/aydemir"
 MODEL_ID = "Qwen/Qwen3-VL-8B-Instruct"
 MESH_BASE_DIR = "/dss/mcmlscratch/06/di38riq/arkit_vsi/raw"
 
-NUM_STEPS = 8  # 8 reasoning steps = 9 total images (1 initial + 8 new renders)
+NUM_STEPS = 16  # 16 reasoning steps = 17 total images (1 initial + 16 new renders)
 IMAGE_WH = (640, 480)
 DEFAULT_FX_FY = 300.0
 CAM_HEIGHT = 1.6
