@@ -4,33 +4,46 @@ from pathlib import Path
 import open3d as o3d
 
 
-# Default mesh base directory
+# Default mesh base directories
 DEFAULT_MESH_BASE_DIR = "/dss/mcmlscratch/06/di38riq/arkit_vsi/raw"
+DEFAULT_SCANNET_MESH_BASE_DIR = "/dss/mcmlscratch/06/di38riq/scans"
 
 # Mesh cache to avoid reloading the same mesh multiple times
 _mesh_cache = {}
 
 
-def find_mesh_file(scene_id, mesh_base_dir=DEFAULT_MESH_BASE_DIR):
+def find_mesh_file(scene_id, mesh_base_dir=DEFAULT_MESH_BASE_DIR, dataset="arkitscenes"):
     """
     Find a mesh file for the given scene_id.
     
-    Searches in both Validation and Training splits.
+    For ARKitScenes: Searches in both Validation and Training splits.
+    For ScanNet: Searches in scans directory for scene{id}_vh_clean_2.ply
     
     Args:
-        scene_id: Scene ID (video_id string)
+        scene_id: Scene ID (video_id string for ARKit, scene0XXX_XX for ScanNet)
         mesh_base_dir: Base directory for mesh files
+        dataset: Dataset name ("arkitscenes" or "scannet")
     
     Returns:
         Path to mesh file, or None if not found
     """
-    video_id = str(scene_id)
-    for split in ["Validation", "Training"]:
-        mesh_path = Path(mesh_base_dir) / split / video_id / f"{video_id}_3dod_mesh.ply"
+    if dataset == "scannet":
+        # ScanNet format: scene0568_00/scene0568_00_vh_clean_2.ply
+        scene_id_str = str(scene_id)
+        mesh_path = Path(mesh_base_dir) / scene_id_str / f"{scene_id_str}_vh_clean_2.ply"
         if mesh_path.exists():
             return mesh_path
-    print(f"[WARN] Mesh file not found for scene {scene_id} in {mesh_base_dir}")
-    return None
+        print(f"[WARN] ScanNet mesh file not found for scene {scene_id} at {mesh_path}")
+        return None
+    else:
+        # ARKitScenes format: Training/42897151/42897151_3dod_mesh.ply
+        video_id = str(scene_id)
+        for split in ["Validation", "Training"]:
+            mesh_path = Path(mesh_base_dir) / split / video_id / f"{video_id}_3dod_mesh.ply"
+            if mesh_path.exists():
+                return mesh_path
+        print(f"[WARN] ARKitScenes mesh file not found for scene {scene_id} in {mesh_base_dir}")
+        return None
 
 
 def load_mesh_cached(mesh_path, max_cache_size=5):

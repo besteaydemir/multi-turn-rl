@@ -58,11 +58,13 @@ from utils import (
 from utils.data import load_vsi_bench_questions as _load_vsi_bench_questions
 
 # ----------------- Config -----------------
+import os
 CACHE_DIR = "/dss/dssmcmlfs01/pn34sa/pn34sa-dss-0000/aydemir"
-MODEL_ID = "Qwen/Qwen3-VL-8B-Instruct"
+MODEL_ID = os.environ.get("MODEL_ID", "Qwen/Qwen3-VL-8B-Instruct")
 MESH_BASE_DIR = "/dss/mcmlscratch/06/di38riq/arkit_vsi/raw"
+SCANNET_MESH_BASE_DIR = "/dss/mcmlscratch/06/di38riq/scans"
 
-NUM_STEPS = 16  # 16 reasoning steps = 17 total images (1 initial + 16 new renders)
+NUM_STEPS = 15  # 15 exploration steps = 16 total images (1 initial + 15 new renders)
 IMAGE_WH = (640, 480)
 DEFAULT_FX_FY = 300.0
 CAM_HEIGHT = 1.6
@@ -77,7 +79,8 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 
 # ----------------- Prompt Builder (kept in main file as requested) -----------------
 def build_instruction_text(R, t, question, bbox=None, options=None, is_final_step=False, 
-                           movement_history=None, step_num=0, question_type="unknown", is_numerical=False):
+                           movement_history=None, step_num=0, question_type="unknown", is_numerical=False,
+                           max_steps=NUM_STEPS):
     """Build instruction text for Qwen - optimized for multiple choice spatial reasoning."""
     R_rounded = np.round(R, 2).tolist()
     t_rounded = np.round(t, 2).tolist()
@@ -116,7 +119,7 @@ def build_instruction_text(R, t, question, bbox=None, options=None, is_final_ste
     
     if is_final_step:
         movement_instruction = f"""
-**⚠️ FINAL STEP {step_num}/8 - ANSWER REQUIRED**
+**⚠️ FINAL STEP {step_num}/{max_steps} - ANSWER REQUIRED**
 
 You have explored the scene and seen all images from your journey. Based on ALL images you've collected:
 - {answer_hint}
@@ -127,7 +130,7 @@ You have explored the scene and seen all images from your journey. Based on ALL 
         important_note = f"⚠️ FINAL STEP: Provide your answer now! NO MOVEMENT needed!"
     else:
         movement_instruction = f"""
-**STEP {step_num}/8 - EXPLORATION PHASE ({8 - step_num} steps remaining)**
+**STEP {step_num}/{max_steps} - EXPLORATION PHASE ({max_steps - step_num} steps remaining)**
 
 ⚙️ **Movement Controls** (rotation FIRST, then translation in new direction):
 - **rotation_angle_degrees**: -90 to +90 (negative=right, positive=left)
@@ -151,7 +154,7 @@ You have explored the scene and seen all images from your journey. Based on ALL 
 - Provide "answer": "A", "B", "C", or "D"
 - Do NOT include movement commands
 """
-        important_note = f"Step {step_num}/8 - Focus on the current image and how it connects to your journey!"
+        important_note = f"Step {step_num}/{max_steps} - Focus on the current image and how it connects to your journey!"
 
     movement_history_text = _format_movement_history(movement_history)
 
@@ -342,9 +345,14 @@ Respond with ONLY a JSON object:
 
 
 # ----------------- Data Loading -----------------
-def load_vsi_bench_questions():
+def load_vsi_bench_questions(dataset="arkitscenes"):
     """Load VSI-Bench questions with MULTIPLE CHOICE question types only."""
-    return _load_vsi_bench_questions(question_types=MCA_QUESTION_TYPES, dataset="arkitscenes")
+    if dataset == "combined":
+        # Load both datasets
+        arkit = _load_vsi_bench_questions(question_types=MCA_QUESTION_TYPES, dataset="arkitscenes")
+        scannet = _load_vsi_bench_questions(question_types=MCA_QUESTION_TYPES, dataset="scannet")
+        return arkit + scannet
+    return _load_vsi_bench_questions(question_types=MCA_QUESTION_TYPES, dataset=dataset)
 
 
 # ----------------- Main Question Runner -----------------
@@ -430,7 +438,8 @@ def run_single_question(mesh_path, question, choices, question_id, experiment_ba
             movement_history=position_history,
             step_num=step,
             question_type=question_type,
-            is_numerical=is_numerical
+            is_numerical=is_numerical,
+            max_steps=num_steps
         )
 
         history_context = _build_history_context(cam_history)
@@ -580,25 +589,33 @@ def _build_history_context(cam_history):
 
 # ----------------- Main Entry Point -----------------
 def main_sequential_split(mesh_base_dir=MESH_BASE_DIR, num_steps_per_question=NUM_STEPS, 
-                          split=1, num_splits=1, continue_from=None, test_mode=False, max_questions=None):
+                          split=1, num_splits=1, continue_from=None, test_mode=False, max_questions=None, dataset="arkitscenes"):
     """
     Main loop - fully sequential with job splitting support.
     
     Args:
+        mesh_base_dir: Base directory for meshes
+        num_steps_per_question: Number of exploration steps per question
         split: Which split to run (1-indexed)
         num_splits: Total number of splits
+        continue_from: Path to experiment folder to continue from
         test_mode: If True, use "test" folder and limit to 1 question
         max_questions: Maximum number of questions to process
+        dataset: Dataset name ("arkitscenes" or "scannet")
     """
     print("\n" + "=" * 80)
-    print("🚀 VSI-BENCH ROUTE PLANNING EVALUATION (SEQUENTIAL WITH SPLITS)")
+    print(f"🚀 VSI-BENCH EVALUATION - {dataset.upper()} (SEQUENTIAL WITH SPLITS)")
     if test_mode:
-        print("   🧪 TEST MODE - Running 1 question to 'test' folder")
+        print("   🧪 TEST MODE - Running 5 questions to 'test' folder")
     else:
         print(f"   Running split {split}/{num_splits}")
     print("=" * 80 + "\n")
 
-    questions = load_vsi_bench_questions()
+    # Set mesh base directory based on dataset
+    if dataset == "scannet":
+        mesh_base_dir = SCANNET_MESH_BASE_DIR
+    
+    questions = load_vsi_bench_questions(dataset=dataset)
     total_questions = len(questions)
     
     # Calculate split ranges
@@ -620,6 +637,7 @@ def main_sequential_split(mesh_base_dir=MESH_BASE_DIR, num_steps_per_question=NU
         print(f"[INFO] Limited to {max_questions} question(s)\n")
     
     # Determine experiment directory
+    EXPERIMENT_BASE = Path("/dss/dssmcmlfs01/pn34sa/pn34sa-dss-0000/aydemir/experiment_logs")
     if test_mode:
         exp_base_dir = Path("test")
         exp_base_dir.mkdir(parents=True, exist_ok=True)
@@ -627,7 +645,9 @@ def main_sequential_split(mesh_base_dir=MESH_BASE_DIR, num_steps_per_question=NU
         exp_base_dir = Path(continue_from)
     else:
         exp_timestamp = timestamp_str()
-        exp_base_dir = Path("experiment_logs") / f"{exp_timestamp}_sequential_split{split}of{num_splits}"
+        model_name = MODEL_ID.split("/")[-1].replace("-Instruct", "")  # e.g., "Qwen3-VL-8B"
+        model_size = "4B" if "4B" in model_name else "8B"
+        exp_base_dir = EXPERIMENT_BASE / "Sequential" / model_size / f"{exp_timestamp}_sequential_{model_name}_{dataset}_split{split}of{num_splits}_{num_steps_per_question}steps"
         exp_base_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"[INFO] 📁 Experiment logs: {exp_base_dir.resolve()}\n")
@@ -658,7 +678,14 @@ def main_sequential_split(mesh_base_dir=MESH_BASE_DIR, num_steps_per_question=NU
     for local_idx, q_data in enumerate(split_questions, 1):
         processed_count += 1
         scene_id = q_data["scene_name"]
-        mesh_file = find_mesh_file(scene_id, mesh_base_dir)
+        # Use question's source dataset for combined mode
+        q_dataset = q_data.get("dataset", dataset) if dataset == "combined" else dataset
+        # Set mesh base directory based on question's dataset
+        if q_dataset == "scannet":
+            q_mesh_base_dir = SCANNET_MESH_BASE_DIR
+        else:
+            q_mesh_base_dir = MESH_BASE_DIR
+        mesh_file = find_mesh_file(scene_id, q_mesh_base_dir, dataset=q_dataset)
         
         if mesh_file is None:
             print(f"[WARN] Question {processed_count}: No mesh for scene {scene_id}. Skipping.\n")
@@ -725,7 +752,8 @@ def main_sequential_split(mesh_base_dir=MESH_BASE_DIR, num_steps_per_question=NU
             "correct": is_correct,
             "is_numerical": is_numerical,
             "mra_score": mra_score,
-            "question_type": q_data["question_type"]
+            "question_type": q_data["question_type"],
+            "dataset": q_data.get("dataset", dataset),
         })
         
         csv_rows.append({
@@ -786,6 +814,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run VSI-Bench reasoning loop (sequential, with job splitting)")
     parser.add_argument("--backend", type=str, default="hf", choices=["hf", "vllm"],
                        help="Inference backend: 'hf' (HuggingFace, default) or 'vllm' (faster)")
+    parser.add_argument("--dataset", type=str, default="arkitscenes", choices=["arkitscenes", "scannet", "combined"],
+                       help="Dataset to evaluate on (default: arkitscenes, use 'combined' for both)")
     parser.add_argument("--steps", type=int, default=NUM_STEPS, help="Number of reasoning steps per question")
     parser.add_argument("--split", type=int, default=1, help="Which split to run (1-indexed)")
     parser.add_argument("--num-splits", type=int, default=1, help="Total number of splits")
@@ -803,22 +833,25 @@ if __name__ == "__main__":
     initialize_backend(args.backend)
 
     if args.test:
-        print(f"[INFO] Running in test mode (5 questions)")
+        print(f"[INFO] Running in test mode (5 questions) on {args.dataset}")
         main_sequential_split(
             num_steps_per_question=args.steps,
             split=1,
             num_splits=1,
             continue_from=None,
             test_mode=True,
-            max_questions=5
+            max_questions=5,
+            dataset=args.dataset
         )
     else:
-        print(f"[INFO] Running split {args.split} of {args.num_splits}")
+        print(f"[INFO] Running split {args.split} of {args.num_splits} on {args.dataset}")
         main_sequential_split(
             num_steps_per_question=args.steps,
             split=args.split,
             num_splits=args.num_splits,
             continue_from=args.continue_from,
             test_mode=False,
-            max_questions=args.max_questions
+            max_questions=args.max_questions,
+            dataset=args.dataset
         )
+

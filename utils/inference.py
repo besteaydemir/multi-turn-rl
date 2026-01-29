@@ -195,6 +195,7 @@ class VLLMBackend(InferenceBackend):
         gpu_memory_utilization: float = 0.85,
         tensor_parallel_size: int = 1,
         dtype: str = "float16",  # FP16 as requested
+        max_images: int = 32,  # Max images per prompt (for video frames)
     ):
         from vllm import LLM, SamplingParams
         from transformers import AutoProcessor
@@ -224,11 +225,10 @@ class VLLMBackend(InferenceBackend):
             dtype=dtype,
             trust_remote_code=True,  # Required for Qwen3-VL tokenizer compatibility
             download_dir=cache_dir,
-            # Pitfall #2: Disable video to save memory (we only use images)
-            # Setting video=0 prevents allocating memory for video embeddings
-            limit_mm_per_prompt={"image": 16, "video": 0},
-            # Pitfall #2 & #3: Match HF processor settings for consistent preprocessing
-            # These pixel settings must match what HF uses to get identical outputs
+            # Support up to max_images (default 32) for video frame input
+            # Disable video mode (not needed - we treat frames as images)
+            limit_mm_per_prompt={"image": max_images, "video": 0},
+            # Match HF processor settings for consistent preprocessing
             mm_processor_kwargs={
                 "min_pixels": 28 * 28,
                 "max_pixels": 1280 * 28 * 28,
@@ -374,6 +374,154 @@ class VLLMBackend(InferenceBackend):
             torch.cuda.empty_cache()
 
 
+class VLLMVideoBackend(InferenceBackend):
+    """
+    vLLM backend with VIDEO mode enabled for Qwen3-VL.
+    
+    This backend uses the video modality instead of multiple images,
+    which allows for more frames (>16) and may process temporal info differently.
+    
+    Key difference from VLLMBackend:
+    - limit_mm_per_prompt enables video: {"image": 0, "video": 1}
+    - multi_modal_data uses "video" key instead of "image"
+    """
+    
+    def __init__(
+        self,
+        model_id: str = "Qwen/Qwen3-VL-8B-Instruct",
+        cache_dir: str = "/dss/dssmcmlfs01/pn34sa/pn34sa-dss-0000/aydemir",
+        max_model_len: int = 32768,
+        max_num_seqs: int = 8,
+        gpu_memory_utilization: float = 0.85,
+        tensor_parallel_size: int = 1,
+        dtype: str = "float16",
+    ):
+        from vllm import LLM, SamplingParams
+        from transformers import AutoProcessor
+        
+        self.model_id = model_id
+        self.cache_dir = cache_dir
+        
+        print(f"[vLLM Video Backend] Loading {model_id}...")
+        print(f"[vLLM Video Backend] VIDEO MODE ENABLED for >16 frames support")
+        
+        import os
+        os.environ["HF_HOME"] = cache_dir
+        os.environ["TRANSFORMERS_CACHE"] = cache_dir
+        os.environ["OMP_NUM_THREADS"] = "1"
+        
+        self.processor = AutoProcessor.from_pretrained(model_id, cache_dir=cache_dir)
+        
+        self.llm = LLM(
+            model=model_id,
+            max_model_len=max_model_len,
+            max_num_seqs=max_num_seqs,
+            gpu_memory_utilization=gpu_memory_utilization,
+            tensor_parallel_size=tensor_parallel_size,
+            dtype=dtype,
+            trust_remote_code=True,
+            download_dir=cache_dir,
+            # VIDEO MODE: Enable video, disable multiple images
+            limit_mm_per_prompt={"image": 0, "video": 1},
+            mm_processor_kwargs={
+                "min_pixels": 28 * 28,
+                "max_pixels": 1280 * 28 * 28,
+            },
+        )
+        
+        self.default_sampling_params = SamplingParams(
+            temperature=0,
+            max_tokens=1024,
+        )
+        
+        print("[vLLM Video Backend] Model loaded.")
+    
+    def _prepare_prompt_video(self, messages: List[Dict]) -> Tuple[str, Any]:
+        """
+        Convert chat messages to vLLM format with VIDEO data.
+        
+        Following the official vLLM guide for Qwen2.5-VL video inputs:
+        https://docs.vllm.ai/en/latest/models/multimodal_inputs.html#video-inputs
+        
+        The video_inputs from process_vision_info should be passed directly
+        to multi_modal_data["video"] without additional processing.
+        """
+        from qwen_vl_utils import process_vision_info
+        
+        prompt = self.processor.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True
+        )
+        
+        # Extract video using process_vision_info (same as official example)
+        image_inputs, video_inputs = process_vision_info(messages)
+        
+        # Return video_inputs directly as per official vLLM docs
+        return prompt, video_inputs
+    
+    def generate(
+        self,
+        messages: List[Dict],
+        max_new_tokens: int = 1024,
+    ) -> str:
+        """Generate with video input."""
+        from vllm import SamplingParams
+        
+        prompt, video_inputs = self._prepare_prompt_video(messages)
+        
+        sampling_params = SamplingParams(
+            temperature=0,
+            max_tokens=max_new_tokens,
+        )
+        
+        # Create input with VIDEO data (not images)
+        if video_inputs:
+            inputs = [{
+                "prompt": prompt,
+                "multi_modal_data": {"video": video_inputs},
+            }]
+        else:
+            inputs = [{"prompt": prompt}]
+        
+        outputs = self.llm.generate(inputs, sampling_params)
+        
+        return outputs[0].outputs[0].text
+    
+    def generate_batch(
+        self,
+        batch_messages: List[List[Dict]],
+        max_new_tokens: int = 1024,
+    ) -> List[str]:
+        """Generate batch with video inputs."""
+        from vllm import SamplingParams
+        
+        sampling_params = SamplingParams(
+            temperature=0,
+            max_tokens=max_new_tokens,
+        )
+        
+        inputs = []
+        for messages in batch_messages:
+            prompt, video_inputs = self._prepare_prompt_video(messages)
+            if video_inputs:
+                inputs.append({
+                    "prompt": prompt,
+                    "multi_modal_data": {"video": video_inputs},
+                })
+            else:
+                inputs.append({"prompt": prompt})
+        
+        outputs = self.llm.generate(inputs, sampling_params)
+        results = [output.outputs[0].text for output in outputs]
+        return results
+    
+    def cleanup(self):
+        """Clean up resources."""
+        del self.llm
+        import torch
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+
 def create_inference_backend(
     backend: str = "hf",
     model_id: str = "Qwen/Qwen3-VL-8B-Instruct",
@@ -384,7 +532,7 @@ def create_inference_backend(
     Factory function to create the appropriate inference backend.
     
     Args:
-        backend: "hf" for HuggingFace, "vllm" for vLLM
+        backend: "hf" for HuggingFace, "vllm" for vLLM (image mode), "vllm_video" for vLLM video mode
         model_id: Model identifier
         cache_dir: Cache directory for model weights
         **kwargs: Additional arguments passed to the backend
@@ -396,5 +544,7 @@ def create_inference_backend(
         return HuggingFaceBackend(model_id=model_id, cache_dir=cache_dir, **kwargs)
     elif backend.lower() == "vllm":
         return VLLMBackend(model_id=model_id, cache_dir=cache_dir, **kwargs)
+    elif backend.lower() == "vllm_video":
+        return VLLMVideoBackend(model_id=model_id, cache_dir=cache_dir, **kwargs)
     else:
-        raise ValueError(f"Unknown backend: {backend}. Choose 'hf' or 'vllm'.")
+        raise ValueError(f"Unknown backend: {backend}. Choose 'hf', 'vllm', or 'vllm_video'.")

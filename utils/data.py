@@ -111,6 +111,7 @@ def load_vsi_bench_questions(question_types=None, dataset="arkitscenes"):
             "answer_id": row.get("ground_truth", -1),
             "question_type": q_type,
             "is_numerical": q_type in numerical_types,
+            "dataset": dataset,  # Track which dataset this question is from
         })
     
     return questions

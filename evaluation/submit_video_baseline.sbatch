@@ -1,27 +1,30 @@
 #!/bin/bash
-#SBATCH --job-name=vsibench_vllm
-#SBATCH --output=logs/vsibench_vllm_%A_%a.out
-#SBATCH --error=logs/vsibench_vllm_%A_%a.err
+#SBATCH --job-name=video_baseline
+#SBATCH --output=logs/video_baseline_%A_%a.out
+#SBATCH --error=logs/video_baseline_%A_%a.err
 #SBATCH --partition=mcml-dgx-a100-40x8
 #SBATCH --qos=mcml
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=64G
-#SBATCH --time=12:00:00
+#SBATCH --time=0:45:00
 #SBATCH --array=1-4
 
 # ============================================================
-# VSI-Bench Sequential Evaluation with vLLM Backend
+# Video Baseline Evaluation for VSI-Bench
 # ============================================================
+# This script evaluates Qwen3-VL on VSI-Bench using actual video
+# frames from ARKitScenes/ScanNet.
+#
 # Usage:
-#   sbatch submit_vllm.sbatch          # 15 steps, arkitscenes
-#   STEPS=8 sbatch submit_vllm.sbatch
-#   DATASET=combined sbatch submit_vllm.sbatch
-#   MODEL_ID="Qwen/Qwen3-VL-4B-Instruct" sbatch submit_vllm.sbatch
+#   sbatch submit_video_baseline.sbatch          # 8 frames, arkitscenes
+#   NUM_FRAMES=16 sbatch submit_video_baseline.sbatch
+#   DATASET=combined sbatch submit_video_baseline.sbatch
+#   MODEL_ID="Qwen/Qwen3-VL-4B-Instruct" sbatch submit_video_baseline.sbatch
 # ============================================================
 
 echo "=============================================="
-echo "VSI-Bench Evaluation (vLLM Backend - FAST)"
+echo "Video Baseline Evaluation"
 echo "=============================================="
 echo "Job ID: $SLURM_JOB_ID"
 echo "Array Task ID: $SLURM_ARRAY_TASK_ID"
@@ -35,9 +38,9 @@ mkdir -p logs
 # Set up environment
 cd /dss/dsshome1/06/di38riq/rl_multi_turn
 
-# Activate conda environment (adjust as needed)
+# Activate conda
 source ~/miniconda3/etc/profile.d/conda.sh
-conda activate env  # use 'env' not 'reasoning'
+conda activate env
 
 # Set cache directories
 export HF_HOME="/dss/dssmcmlfs01/pn34sa/pn34sa-dss-0000/aydemir"
@@ -49,30 +52,27 @@ export VLLM_USE_MODELSCOPE=False
 export VLLM_ALLOW_LONG_MAX_MODEL_LEN=1
 
 # CRITICAL: Fix CUDA multiprocessing issue
-# Must be set BEFORE Python starts to avoid "Cannot re-initialize CUDA in forked subprocess"
 export VLLM_WORKER_MULTIPROC_METHOD=spawn
 
 # Configuration (can override with environment variables)
-STEPS=${STEPS:-15}
+NUM_FRAMES=${NUM_FRAMES:-8}
 DATASET=${DATASET:-arkitscenes}
 MODEL_ID_PARAM=${MODEL_ID:-"Qwen/Qwen3-VL-8B-Instruct"}
 
-# Run the evaluation with vLLM backend
 SPLIT=${SLURM_ARRAY_TASK_ID}
 NUM_SPLITS=4
 
 echo ""
 echo "Model: ${MODEL_ID_PARAM}"
 echo "Dataset: ${DATASET}"
-echo "Running split ${SPLIT} of ${NUM_SPLITS} with ${STEPS} steps using vLLM..."
+echo "Running split ${SPLIT} of ${NUM_SPLITS} with ${NUM_FRAMES} frames..."
 echo ""
 
-MODEL_ID="${MODEL_ID_PARAM}" python evaluation/sequential.py \
-    --backend vllm \
+MODEL_ID="${MODEL_ID_PARAM}" python evaluation/video_baseline.py \
     --dataset ${DATASET} \
+    --num-frames ${NUM_FRAMES} \
     --split ${SPLIT} \
-    --num-splits ${NUM_SPLITS} \
-    --steps ${STEPS}
+    --num-splits ${NUM_SPLITS}
 
 echo ""
 echo "=============================================="

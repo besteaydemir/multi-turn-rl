@@ -1,0 +1,347 @@
+Starting frame extraction at Mon Jan 26 08:16:35 PM CET 2026
+[1/87] Processing scene0025_01...
+Namespace(filename='/dss/mcmlscratch/06/di38riq/scans/scans/scene0025_01/scene0025_01.sens', output_path='/dss/mcmlscratch/06/di38riq/scans/scans/scene0025_01/frames', export_depth_images=False, export_color_images=True, export_poses=False, export_intrinsics=False)
+loading /dss/mcmlscratch/06/di38riq/scans/scans/scene0025_01/scene0025_01.sens...loaded!
+exporting 1781 color frames to /dss/mcmlscratch/06/di38riq/scans/scans/scene0025_01/frames/color
+  SUCCESS: Extracted 1781 frames
+Namespace(filename='/dss/mcmlscratch/06/di38riq/scans/scans/scene0030_02/scene0030_02.sens', output_path='/dss/mcmlscratch/06/di38riq/scans/scans/scene0030_02/frames', export_depth_images=False, export_color_images=True, export_poses=False, export_intrinsics=False)
+loading /dss/mcmlscratch/06/di38riq/scans/scans/scene0030_02/scene0030_02.sens...loaded!
+exporting 1922 color frames to /dss/mcmlscratch/06/di38riq/scans/scans/scene0030_02/frames/color
+  SUCCESS: Extracted 1922 frames
+Namespace(filename='/dss/mcmlscratch/06/di38riq/scans/scans/scene0046_01/scene0046_01.sens', output_path='/dss/mcmlscratch/06/di38riq/scans/scans/scene0046_01/frames', export_depth_images=False, export_color_images=True, export_poses=False, export_intrinsics=False)
+loading /dss/mcmlscratch/06/di38riq/scans/scans/scene0046_01/scene0046_01.sens...loaded!
+exporting 2469 color frames to /dss/mcmlscratch/06/di38riq/scans/scans/scene0046_01/frames/color
+  SUCCESS: Extracted 2469 frames
+Namespace(filename='/dss/mcmlscratch/06/di38riq/scans/scans/scene0050_01/scene0050_01.sens', output_path='/dss/mcmlscratch/06/di38riq/scans/scans/scene0050_01/frames', export_depth_images=False, export_color_images=True, export_poses=False, export_intrinsics=False)
+loading /dss/mcmlscratch/06/di38riq/scans/scans/scene0050_01/scene0050_01.sens...loaded!
+exporting 3711 color frames to /dss/mcmlscratch/06/di38riq/scans/scans/scene0050_01/frames/color
+  SUCCESS: Extracted 3711 frames
+Namespace(filename='/dss/mcmlscratch/06/di38riq/scans/scans/scene0077_01/scene0077_01.sens', output_path='/dss/mcmlscratch/06/di38riq/scans/scans/scene0077_01/frames', export_depth_images=False, export_color_images=True, export_poses=False, export_intrinsics=False)
+loading /dss/mcmlscratch/06/di38riq/scans/scans/scene0077_01/scene0077_01.sens...loaded!
+exporting 935 color frames to /dss/mcmlscratch/06/di38riq/scans/scans/scene0077_01/frames/color
+  SUCCESS: Extracted 935 frames
+Namespace(filename='/dss/mcmlscratch/06/di38riq/scans/scans/scene0081_02/scene0081_02.sens', output_path='/dss/mcmlscratch/06/di38riq/scans/scans/scene0081_02/frames', export_depth_images=False, export_color_images=True, export_poses=False, export_intrinsics=False)
+loading /dss/mcmlscratch/06/di38riq/scans/scans/scene0081_02/scene0081_02.sens...loaded!
+exporting 1252 color frames to /dss/mcmlscratch/06/di38riq/scans/scans/scene0081_02/frames/color
+  SUCCESS: Extracted 1252 frames
+Namespace(filename='/dss/mcmlscratch/06/di38riq/scans/scans/scene0086_02/scene0086_02.sens', output_path='/dss/mcmlscratch/06/di38riq/scans/scans/scene0086_02/frames', export_depth_images=False, export_color_images=True, export_poses=False, export_intrinsics=False)
+loading /dss/mcmlscratch/06/di38riq/scans/scans/scene0086_02/scene0086_02.sens...loaded!
+exporting 1268 color frames to /dss/mcmlscratch/06/di38riq/scans/scans/scene0086_02/frames/color
+  SUCCESS: Extracted 1268 frames
+Namespace(filename='/dss/mcmlscratch/06/di38riq/scans/scans/scene0088_01/scene0088_01.sens', output_path='/dss/mcmlscratch/06/di38riq/scans/scans/scene0088_01/frames', export_depth_images=False, export_color_images=True, export_poses=False, export_intrinsics=False)
+loading /dss/mcmlscratch/06/di38riq/scans/scans/scene0088_01/scene0088_01.sens...loaded!
+exporting 1066 color frames to /dss/mcmlscratch/06/di38riq/scans/scans/scene0088_01/frames/color
+  SUCCESS: Extracted 1066 frames
+Namespace(filename='/dss/mcmlscratch/06/di38riq/scans/scans/scene0095_01/scene0095_01.sens', output_path='/dss/mcmlscratch/06/di38riq/scans/scans/scene0095_01/frames', export_depth_images=False, export_color_images=True, export_poses=False, export_intrinsics=False)
+loading /dss/mcmlscratch/06/di38riq/scans/scans/scene0095_01/scene0095_01.sens...loaded!
+exporting 1578 color frames to /dss/mcmlscratch/06/di38riq/scans/scans/scene0095_01/frames/color
+  SUCCESS: Extracted 1578 frames
+Namespace(filename='/dss/mcmlscratch/06/di38riq/scans/scans/scene0100_00/scene0100_00.sens', output_path='/dss/mcmlscratch/06/di38riq/scans/scans/scene0100_00/frames', export_depth_images=False, export_color_images=True, export_poses=False, export_intrinsics=False)
+loading /dss/mcmlscratch/06/di38riq/scans/scans/scene0100_00/scene0100_00.sens...loaded!
+exporting 1016 color frames to /dss/mcmlscratch/06/di38riq/scans/scans/scene0100_00/frames/color
+  SUCCESS: Extracted 1016 frames
+Namespace(filename='/dss/mcmlscratch/06/di38riq/scans/scans/scene0144_00/scene0144_00.sens', output_path='/dss/mcmlscratch/06/di38riq/scans/scans/scene0144_00/frames', export_depth_images=False, export_color_images=True, export_poses=False, export_intrinsics=False)
+loading /dss/mcmlscratch/06/di38riq/scans/scans/scene0144_00/scene0144_00.sens...loaded!
+exporting 1437 color frames to /dss/mcmlscratch/06/di38riq/scans/scans/scene0144_00/frames/color
+  SUCCESS: Extracted 1437 frames
+Namespace(filename='/dss/mcmlscratch/06/di38riq/scans/scans/scene0146_01/scene0146_01.sens', output_path='/dss/mcmlscratch/06/di38riq/scans/scans/scene0146_01/frames', export_depth_images=False, export_color_images=True, export_poses=False, export_intrinsics=False)
+loading /dss/mcmlscratch/06/di38riq/scans/scans/scene0146_01/scene0146_01.sens...loaded!
+exporting 1139 color frames to /dss/mcmlscratch/06/di38riq/scans/scans/scene0146_01/frames/color
+  SUCCESS: Extracted 1139 frames
+Namespace(filename='/dss/mcmlscratch/06/di38riq/scans/scans/scene0149_00/scene0149_00.sens', output_path='/dss/mcmlscratch/06/di38riq/scans/scans/scene0149_00/frames', export_depth_images=False, export_color_images=True, export_poses=False, export_intrinsics=False)
+loading /dss/mcmlscratch/06/di38riq/scans/scans/scene0149_00/scene0149_00.sens...loaded!
+exporting 1409 color frames to /dss/mcmlscratch/06/di38riq/scans/scans/scene0149_00/frames/color
+  SUCCESS: Extracted 1409 frames
+Namespace(filename='/dss/mcmlscratch/06/di38riq/scans/scans/scene0153_00/scene0153_00.sens', output_path='/dss/mcmlscratch/06/di38riq/scans/scans/scene0153_00/frames', export_depth_images=False, export_color_images=True, export_poses=False, export_intrinsics=False)
+loading /dss/mcmlscratch/06/di38riq/scans/scans/scene0153_00/scene0153_00.sens...loaded!
+exporting 582 color frames to /dss/mcmlscratch/06/di38riq/scans/scans/scene0153_00/frames/color
+  SUCCESS: Extracted 582 frames
+Namespace(filename='/dss/mcmlscratch/06/di38riq/scans/scans/scene0164_02/scene0164_02.sens', output_path='/dss/mcmlscratch/06/di38riq/scans/scans/scene0164_02/frames', export_depth_images=False, export_color_images=True, export_poses=False, export_intrinsics=False)
+loading /dss/mcmlscratch/06/di38riq/scans/scans/scene0164_02/scene0164_02.sens...loaded!
+exporting 1203 color frames to /dss/mcmlscratch/06/di38riq/scans/scans/scene0164_02/frames/color
+  SUCCESS: Extracted 1203 frames
+Namespace(filename='/dss/mcmlscratch/06/di38riq/scans/scans/scene0169_01/scene0169_01.sens', output_path='/dss/mcmlscratch/06/di38riq/scans/scans/scene0169_01/frames', export_depth_images=False, export_color_images=True, export_poses=False, export_intrinsics=False)
+loading /dss/mcmlscratch/06/di38riq/scans/scans/scene0169_01/scene0169_01.sens...loaded!
+exporting 1565 color frames to /dss/mcmlscratch/06/di38riq/scans/scans/scene0169_01/frames/color
+  SUCCESS: Extracted 1565 frames
+Namespace(filename='/dss/mcmlscratch/06/di38riq/scans/scans/scene0193_01/scene0193_01.sens', output_path='/dss/mcmlscratch/06/di38riq/scans/scans/scene0193_01/frames', export_depth_images=False, export_color_images=True, export_poses=False, export_intrinsics=False)
+loading /dss/mcmlscratch/06/di38riq/scans/scans/scene0193_01/scene0193_01.sens...loaded!
+exporting 536 color frames to /dss/mcmlscratch/06/di38riq/scans/scans/scene0193_01/frames/color
+  SUCCESS: Extracted 536 frames
+Namespace(filename='/dss/mcmlscratch/06/di38riq/scans/scans/scene0196_00/scene0196_00.sens', output_path='/dss/mcmlscratch/06/di38riq/scans/scans/scene0196_00/frames', export_depth_images=False, export_color_images=True, export_poses=False, export_intrinsics=False)
+loading /dss/mcmlscratch/06/di38riq/scans/scans/scene0196_00/scene0196_00.sens...loaded!
+exporting 1920 color frames to /dss/mcmlscratch/06/di38riq/scans/scans/scene0196_00/frames/color
+  SUCCESS: Extracted 1920 frames
+Namespace(filename='/dss/mcmlscratch/06/di38riq/scans/scans/scene0203_01/scene0203_01.sens', output_path='/dss/mcmlscratch/06/di38riq/scans/scans/scene0203_01/frames', export_depth_images=False, export_color_images=True, export_poses=False, export_intrinsics=False)
+loading /dss/mcmlscratch/06/di38riq/scans/scans/scene0203_01/scene0203_01.sens...loaded!
+exporting 1466 color frames to /dss/mcmlscratch/06/di38riq/scans/scans/scene0203_01/frames/color
+  SUCCESS: Extracted 1466 frames
+Namespace(filename='/dss/mcmlscratch/06/di38riq/scans/scans/scene0207_02/scene0207_02.sens', output_path='/dss/mcmlscratch/06/di38riq/scans/scans/scene0207_02/frames', export_depth_images=False, export_color_images=True, export_poses=False, export_intrinsics=False)
+loading /dss/mcmlscratch/06/di38riq/scans/scans/scene0207_02/scene0207_02.sens...loaded!
+exporting 2593 color frames to /dss/mcmlscratch/06/di38riq/scans/scans/scene0207_02/frames/color
+  SUCCESS: Extracted 2593 frames
+Namespace(filename='/dss/mcmlscratch/06/di38riq/scans/scans/scene0208_00/scene0208_00.sens', output_path='/dss/mcmlscratch/06/di38riq/scans/scans/scene0208_00/frames', export_depth_images=False, export_color_images=True, export_poses=False, export_intrinsics=False)
+loading /dss/mcmlscratch/06/di38riq/scans/scans/scene0208_00/scene0208_00.sens...loaded!
+exporting 2389 color frames to /dss/mcmlscratch/06/di38riq/scans/scans/scene0208_00/frames/color
+  SUCCESS: Extracted 2389 frames
+Namespace(filename='/dss/mcmlscratch/06/di38riq/scans/scans/scene0221_01/scene0221_01.sens', output_path='/dss/mcmlscratch/06/di38riq/scans/scans/scene0221_01/frames', export_depth_images=False, export_color_images=True, export_poses=False, export_intrinsics=False)
+loading /dss/mcmlscratch/06/di38riq/scans/scans/scene0221_01/scene0221_01.sens...loaded!
+exporting 781 color frames to /dss/mcmlscratch/06/di38riq/scans/scans/scene0221_01/frames/color
+  SUCCESS: Extracted 781 frames
+Namespace(filename='/dss/mcmlscratch/06/di38riq/scans/scans/scene0222_01/scene0222_01.sens', output_path='/dss/mcmlscratch/06/di38riq/scans/scans/scene0222_01/frames', export_depth_images=False, export_color_images=True, export_poses=False, export_intrinsics=False)
+loading /dss/mcmlscratch/06/di38riq/scans/scans/scene0222_01/scene0222_01.sens...loaded!
+exporting 4182 color frames to /dss/mcmlscratch/06/di38riq/scans/scans/scene0222_01/frames/color
+  SUCCESS: Extracted 4182 frames
+Namespace(filename='/dss/mcmlscratch/06/di38riq/scans/scans/scene0231_00/scene0231_00.sens', output_path='/dss/mcmlscratch/06/di38riq/scans/scans/scene0231_00/frames', export_depth_images=False, export_color_images=True, export_poses=False, export_intrinsics=False)
+loading /dss/mcmlscratch/06/di38riq/scans/scans/scene0231_00/scene0231_00.sens...loaded!
+exporting 4439 color frames to /dss/mcmlscratch/06/di38riq/scans/scans/scene0231_00/frames/color
+  SUCCESS: Extracted 4439 frames
+Namespace(filename='/dss/mcmlscratch/06/di38riq/scans/scans/scene0246_00/scene0246_00.sens', output_path='/dss/mcmlscratch/06/di38riq/scans/scans/scene0246_00/frames', export_depth_images=False, export_color_images=True, export_poses=False, export_intrinsics=False)
+loading /dss/mcmlscratch/06/di38riq/scans/scans/scene0246_00/scene0246_00.sens...loaded!
+exporting 2958 color frames to /dss/mcmlscratch/06/di38riq/scans/scans/scene0246_00/frames/color
+  SUCCESS: Extracted 2958 frames
+Namespace(filename='/dss/mcmlscratch/06/di38riq/scans/scans/scene0251_00/scene0251_00.sens', output_path='/dss/mcmlscratch/06/di38riq/scans/scans/scene0251_00/frames', export_depth_images=False, export_color_images=True, export_poses=False, export_intrinsics=False)
+loading /dss/mcmlscratch/06/di38riq/scans/scans/scene0251_00/scene0251_00.sens...loaded!
+exporting 1542 color frames to /dss/mcmlscratch/06/di38riq/scans/scans/scene0251_00/frames/color
+  SUCCESS: Extracted 1542 frames
+Namespace(filename='/dss/mcmlscratch/06/di38riq/scans/scans/scene0277_02/scene0277_02.sens', output_path='/dss/mcmlscratch/06/di38riq/scans/scans/scene0277_02/frames', export_depth_images=False, export_color_images=True, export_poses=False, export_intrinsics=False)
+loading /dss/mcmlscratch/06/di38riq/scans/scans/scene0277_02/scene0277_02.sens...loaded!
+exporting 861 color frames to /dss/mcmlscratch/06/di38riq/scans/scans/scene0277_02/frames/color
+  SUCCESS: Extracted 861 frames
+Namespace(filename='/dss/mcmlscratch/06/di38riq/scans/scans/scene0304_00/scene0304_00.sens', output_path='/dss/mcmlscratch/06/di38riq/scans/scans/scene0304_00/frames', export_depth_images=False, export_color_images=True, export_poses=False, export_intrinsics=False)
+loading /dss/mcmlscratch/06/di38riq/scans/scans/scene0304_00/scene0304_00.sens...loaded!
+exporting 1773 color frames to /dss/mcmlscratch/06/di38riq/scans/scans/scene0304_00/frames/color
+  SUCCESS: Extracted 1773 frames
+Namespace(filename='/dss/mcmlscratch/06/di38riq/scans/scans/scene0307_02/scene0307_02.sens', output_path='/dss/mcmlscratch/06/di38riq/scans/scans/scene0307_02/frames', export_depth_images=False, export_color_images=True, export_poses=False, export_intrinsics=False)
+loading /dss/mcmlscratch/06/di38riq/scans/scans/scene0307_02/scene0307_02.sens...loaded!
+exporting 2091 color frames to /dss/mcmlscratch/06/di38riq/scans/scans/scene0307_02/frames/color
+  SUCCESS: Extracted 2091 frames
+Namespace(filename='/dss/mcmlscratch/06/di38riq/scans/scans/scene0316_00/scene0316_00.sens', output_path='/dss/mcmlscratch/06/di38riq/scans/scans/scene0316_00/frames', export_depth_images=False, export_color_images=True, export_poses=False, export_intrinsics=False)
+loading /dss/mcmlscratch/06/di38riq/scans/scans/scene0316_00/scene0316_00.sens...loaded!
+exporting 770 color frames to /dss/mcmlscratch/06/di38riq/scans/scans/scene0316_00/frames/color
+  SUCCESS: Extracted 770 frames
+Namespace(filename='/dss/mcmlscratch/06/di38riq/scans/scans/scene0328_00/scene0328_00.sens', output_path='/dss/mcmlscratch/06/di38riq/scans/scans/scene0328_00/frames', export_depth_images=False, export_color_images=True, export_poses=False, export_intrinsics=False)
+loading /dss/mcmlscratch/06/di38riq/scans/scans/scene0328_00/scene0328_00.sens...loaded!
+exporting 1411 color frames to /dss/mcmlscratch/06/di38riq/scans/scans/scene0328_00/frames/color
+  SUCCESS: Extracted 1411 frames
+Namespace(filename='/dss/mcmlscratch/06/di38riq/scans/scans/scene0338_00/scene0338_00.sens', output_path='/dss/mcmlscratch/06/di38riq/scans/scans/scene0338_00/frames', export_depth_images=False, export_color_images=True, export_poses=False, export_intrinsics=False)
+loading /dss/mcmlscratch/06/di38riq/scans/scans/scene0338_00/scene0338_00.sens...loaded!
+exporting 804 color frames to /dss/mcmlscratch/06/di38riq/scans/scans/scene0338_00/frames/color
+  SUCCESS: Extracted 804 frames
+Namespace(filename='/dss/mcmlscratch/06/di38riq/scans/scans/scene0353_00/scene0353_00.sens', output_path='/dss/mcmlscratch/06/di38riq/scans/scans/scene0353_00/frames', export_depth_images=False, export_color_images=True, export_poses=False, export_intrinsics=False)
+loading /dss/mcmlscratch/06/di38riq/scans/scans/scene0353_00/scene0353_00.sens...loaded!
+exporting 2981 color frames to /dss/mcmlscratch/06/di38riq/scans/scans/scene0353_00/frames/color
+  SUCCESS: Extracted 2981 frames
+Namespace(filename='/dss/mcmlscratch/06/di38riq/scans/scans/scene0354_00/scene0354_00.sens', output_path='/dss/mcmlscratch/06/di38riq/scans/scans/scene0354_00/frames', export_depth_images=False, export_color_images=True, export_poses=False, export_intrinsics=False)
+loading /dss/mcmlscratch/06/di38riq/scans/scans/scene0354_00/scene0354_00.sens...loaded!
+exporting 1126 color frames to /dss/mcmlscratch/06/di38riq/scans/scans/scene0354_00/frames/color
+  SUCCESS: Extracted 1126 frames
+Namespace(filename='/dss/mcmlscratch/06/di38riq/scans/scans/scene0356_00/scene0356_00.sens', output_path='/dss/mcmlscratch/06/di38riq/scans/scans/scene0356_00/frames', export_depth_images=False, export_color_images=True, export_poses=False, export_intrinsics=False)
+loading /dss/mcmlscratch/06/di38riq/scans/scans/scene0356_00/scene0356_00.sens...loaded!
+exporting 1360 color frames to /dss/mcmlscratch/06/di38riq/scans/scans/scene0356_00/frames/color
+  SUCCESS: Extracted 1360 frames
+Namespace(filename='/dss/mcmlscratch/06/di38riq/scans/scans/scene0357_01/scene0357_01.sens', output_path='/dss/mcmlscratch/06/di38riq/scans/scans/scene0357_01/frames', export_depth_images=False, export_color_images=True, export_poses=False, export_intrinsics=False)
+loading /dss/mcmlscratch/06/di38riq/scans/scans/scene0357_01/scene0357_01.sens...loaded!
+exporting 907 color frames to /dss/mcmlscratch/06/di38riq/scans/scans/scene0357_01/frames/color
+  SUCCESS: Extracted 907 frames
+Namespace(filename='/dss/mcmlscratch/06/di38riq/scans/scans/scene0378_01/scene0378_01.sens', output_path='/dss/mcmlscratch/06/di38riq/scans/scans/scene0378_01/frames', export_depth_images=False, export_color_images=True, export_poses=False, export_intrinsics=False)
+loading /dss/mcmlscratch/06/di38riq/scans/scans/scene0378_01/scene0378_01.sens...loaded!
+exporting 2305 color frames to /dss/mcmlscratch/06/di38riq/scans/scans/scene0378_01/frames/color
+  SUCCESS: Extracted 2305 frames
+Namespace(filename='/dss/mcmlscratch/06/di38riq/scans/scans/scene0412_00/scene0412_00.sens', output_path='/dss/mcmlscratch/06/di38riq/scans/scans/scene0412_00/frames', export_depth_images=False, export_color_images=True, export_poses=False, export_intrinsics=False)
+loading /dss/mcmlscratch/06/di38riq/scans/scans/scene0412_00/scene0412_00.sens...loaded!
+exporting 2365 color frames to /dss/mcmlscratch/06/di38riq/scans/scans/scene0412_00/frames/color
+  SUCCESS: Extracted 2365 frames
+Namespace(filename='/dss/mcmlscratch/06/di38riq/scans/scans/scene0426_00/scene0426_00.sens', output_path='/dss/mcmlscratch/06/di38riq/scans/scans/scene0426_00/frames', export_depth_images=False, export_color_images=True, export_poses=False, export_intrinsics=False)
+loading /dss/mcmlscratch/06/di38riq/scans/scans/scene0426_00/scene0426_00.sens...loaded!
+exporting 2301 color frames to /dss/mcmlscratch/06/di38riq/scans/scans/scene0426_00/frames/color
+  SUCCESS: Extracted 2301 frames
+Namespace(filename='/dss/mcmlscratch/06/di38riq/scans/scans/scene0435_02/scene0435_02.sens', output_path='/dss/mcmlscratch/06/di38riq/scans/scans/scene0435_02/frames', export_depth_images=False, export_color_images=True, export_poses=False, export_intrinsics=False)
+loading /dss/mcmlscratch/06/di38riq/scans/scans/scene0435_02/scene0435_02.sens...loaded!
+exporting 1617 color frames to /dss/mcmlscratch/06/di38riq/scans/scans/scene0435_02/frames/color
+  SUCCESS: Extracted 1617 frames
+Namespace(filename='/dss/mcmlscratch/06/di38riq/scans/scans/scene0441_00/scene0441_00.sens', output_path='/dss/mcmlscratch/06/di38riq/scans/scans/scene0441_00/frames', export_depth_images=False, export_color_images=True, export_poses=False, export_intrinsics=False)
+loading /dss/mcmlscratch/06/di38riq/scans/scans/scene0441_00/scene0441_00.sens...loaded!
+exporting 766 color frames to /dss/mcmlscratch/06/di38riq/scans/scans/scene0441_00/frames/color
+  SUCCESS: Extracted 766 frames
+Namespace(filename='/dss/mcmlscratch/06/di38riq/scans/scans/scene0458_00/scene0458_00.sens', output_path='/dss/mcmlscratch/06/di38riq/scans/scans/scene0458_00/frames', export_depth_images=False, export_color_images=True, export_poses=False, export_intrinsics=False)
+loading /dss/mcmlscratch/06/di38riq/scans/scans/scene0458_00/scene0458_00.sens...loaded!
+exporting 1985 color frames to /dss/mcmlscratch/06/di38riq/scans/scans/scene0458_00/frames/color
+  SUCCESS: Extracted 1985 frames
+Namespace(filename='/dss/mcmlscratch/06/di38riq/scans/scans/scene0461_00/scene0461_00.sens', output_path='/dss/mcmlscratch/06/di38riq/scans/scans/scene0461_00/frames', export_depth_images=False, export_color_images=True, export_poses=False, export_intrinsics=False)
+loading /dss/mcmlscratch/06/di38riq/scans/scans/scene0461_00/scene0461_00.sens...loaded!
+exporting 520 color frames to /dss/mcmlscratch/06/di38riq/scans/scans/scene0461_00/frames/color
+  SUCCESS: Extracted 520 frames
+Namespace(filename='/dss/mcmlscratch/06/di38riq/scans/scans/scene0462_00/scene0462_00.sens', output_path='/dss/mcmlscratch/06/di38riq/scans/scans/scene0462_00/frames', export_depth_images=False, export_color_images=True, export_poses=False, export_intrinsics=False)
+loading /dss/mcmlscratch/06/di38riq/scans/scans/scene0462_00/scene0462_00.sens...loaded!
+exporting 1140 color frames to /dss/mcmlscratch/06/di38riq/scans/scans/scene0462_00/frames/color
+  SUCCESS: Extracted 1140 frames
+Namespace(filename='/dss/mcmlscratch/06/di38riq/scans/scans/scene0474_04/scene0474_04.sens', output_path='/dss/mcmlscratch/06/di38riq/scans/scans/scene0474_04/frames', export_depth_images=False, export_color_images=True, export_poses=False, export_intrinsics=False)
+loading /dss/mcmlscratch/06/di38riq/scans/scans/scene0474_04/scene0474_04.sens...loaded!
+exporting 848 color frames to /dss/mcmlscratch/06/di38riq/scans/scans/scene0474_04/frames/color
+  SUCCESS: Extracted 848 frames
+Namespace(filename='/dss/mcmlscratch/06/di38riq/scans/scans/scene0488_01/scene0488_01.sens', output_path='/dss/mcmlscratch/06/di38riq/scans/scans/scene0488_01/frames', export_depth_images=False, export_color_images=True, export_poses=False, export_intrinsics=False)
+loading /dss/mcmlscratch/06/di38riq/scans/scans/scene0488_01/scene0488_01.sens...loaded!
+exporting 1096 color frames to /dss/mcmlscratch/06/di38riq/scans/scans/scene0488_01/frames/color
+  SUCCESS: Extracted 1096 frames
+Namespace(filename='/dss/mcmlscratch/06/di38riq/scans/scans/scene0494_00/scene0494_00.sens', output_path='/dss/mcmlscratch/06/di38riq/scans/scans/scene0494_00/frames', export_depth_images=False, export_color_images=True, export_poses=False, export_intrinsics=False)
+loading /dss/mcmlscratch/06/di38riq/scans/scans/scene0494_00/scene0494_00.sens...loaded!
+exporting 741 color frames to /dss/mcmlscratch/06/di38riq/scans/scans/scene0494_00/frames/color
+  SUCCESS: Extracted 741 frames
+Namespace(filename='/dss/mcmlscratch/06/di38riq/scans/scans/scene0496_00/scene0496_00.sens', output_path='/dss/mcmlscratch/06/di38riq/scans/scans/scene0496_00/frames', export_depth_images=False, export_color_images=True, export_poses=False, export_intrinsics=False)
+loading /dss/mcmlscratch/06/di38riq/scans/scans/scene0496_00/scene0496_00.sens...loaded!
+exporting 1336 color frames to /dss/mcmlscratch/06/di38riq/scans/scans/scene0496_00/frames/color
+  SUCCESS: Extracted 1336 frames
+Namespace(filename='/dss/mcmlscratch/06/di38riq/scans/scans/scene0500_00/scene0500_00.sens', output_path='/dss/mcmlscratch/06/di38riq/scans/scans/scene0500_00/frames', export_depth_images=False, export_color_images=True, export_poses=False, export_intrinsics=False)
+loading /dss/mcmlscratch/06/di38riq/scans/scans/scene0500_00/scene0500_00.sens...loaded!
+exporting 2182 color frames to /dss/mcmlscratch/06/di38riq/scans/scans/scene0500_00/frames/color
+  SUCCESS: Extracted 2182 frames
+Namespace(filename='/dss/mcmlscratch/06/di38riq/scans/scans/scene0518_00/scene0518_00.sens', output_path='/dss/mcmlscratch/06/di38riq/scans/scans/scene0518_00/frames', export_depth_images=False, export_color_images=True, export_poses=False, export_intrinsics=False)
+loading /dss/mcmlscratch/06/di38riq/scans/scans/scene0518_00/scene0518_00.sens...loaded!
+exporting 1463 color frames to /dss/mcmlscratch/06/di38riq/scans/scans/scene0518_00/frames/color
+  SUCCESS: Extracted 1463 frames
+Namespace(filename='/dss/mcmlscratch/06/di38riq/scans/scans/scene0550_00/scene0550_00.sens', output_path='/dss/mcmlscratch/06/di38riq/scans/scans/scene0550_00/frames', export_depth_images=False, export_color_images=True, export_poses=False, export_intrinsics=False)
+loading /dss/mcmlscratch/06/di38riq/scans/scans/scene0550_00/scene0550_00.sens...loaded!
+exporting 3915 color frames to /dss/mcmlscratch/06/di38riq/scans/scans/scene0550_00/frames/color
+  SUCCESS: Extracted 3915 frames
+Namespace(filename='/dss/mcmlscratch/06/di38riq/scans/scans/scene0553_00/scene0553_00.sens', output_path='/dss/mcmlscratch/06/di38riq/scans/scans/scene0553_00/frames', export_depth_images=False, export_color_images=True, export_poses=False, export_intrinsics=False)
+loading /dss/mcmlscratch/06/di38riq/scans/scans/scene0553_00/scene0553_00.sens...loaded!
+exporting 1501 color frames to /dss/mcmlscratch/06/di38riq/scans/scans/scene0553_00/frames/color
+  SUCCESS: Extracted 1501 frames
+Namespace(filename='/dss/mcmlscratch/06/di38riq/scans/scans/scene0565_00/scene0565_00.sens', output_path='/dss/mcmlscratch/06/di38riq/scans/scans/scene0565_00/frames', export_depth_images=False, export_color_images=True, export_poses=False, export_intrinsics=False)
+loading /dss/mcmlscratch/06/di38riq/scans/scans/scene0565_00/scene0565_00.sens...loaded!
+exporting 1065 color frames to /dss/mcmlscratch/06/di38riq/scans/scans/scene0565_00/frames/color
+  SUCCESS: Extracted 1065 frames
+Namespace(filename='/dss/mcmlscratch/06/di38riq/scans/scans/scene0568_02/scene0568_02.sens', output_path='/dss/mcmlscratch/06/di38riq/scans/scans/scene0568_02/frames', export_depth_images=False, export_color_images=True, export_poses=False, export_intrinsics=False)
+loading /dss/mcmlscratch/06/di38riq/scans/scans/scene0568_02/scene0568_02.sens...loaded!
+exporting 1409 color frames to /dss/mcmlscratch/06/di38riq/scans/scans/scene0568_02/frames/color
+  SUCCESS: Extracted 1409 frames
+Namespace(filename='/dss/mcmlscratch/06/di38riq/scans/scans/scene0574_01/scene0574_01.sens', output_path='/dss/mcmlscratch/06/di38riq/scans/scans/scene0574_01/frames', export_depth_images=False, export_color_images=True, export_poses=False, export_intrinsics=False)
+loading /dss/mcmlscratch/06/di38riq/scans/scans/scene0574_01/scene0574_01.sens...loaded!
+exporting 1685 color frames to /dss/mcmlscratch/06/di38riq/scans/scans/scene0574_01/frames/color
+  SUCCESS: Extracted 1685 frames
+Namespace(filename='/dss/mcmlscratch/06/di38riq/scans/scans/scene0575_01/scene0575_01.sens', output_path='/dss/mcmlscratch/06/di38riq/scans/scans/scene0575_01/frames', export_depth_images=False, export_color_images=True, export_poses=False, export_intrinsics=False)
+loading /dss/mcmlscratch/06/di38riq/scans/scans/scene0575_01/scene0575_01.sens...loaded!
+exporting 3052 color frames to /dss/mcmlscratch/06/di38riq/scans/scans/scene0575_01/frames/color
+  SUCCESS: Extracted 3052 frames
+Namespace(filename='/dss/mcmlscratch/06/di38riq/scans/scans/scene0580_01/scene0580_01.sens', output_path='/dss/mcmlscratch/06/di38riq/scans/scans/scene0580_01/frames', export_depth_images=False, export_color_images=True, export_poses=False, export_intrinsics=False)
+loading /dss/mcmlscratch/06/di38riq/scans/scans/scene0580_01/scene0580_01.sens...loaded!
+exporting 3821 color frames to /dss/mcmlscratch/06/di38riq/scans/scans/scene0580_01/frames/color
+  SUCCESS: Extracted 3821 frames
+Namespace(filename='/dss/mcmlscratch/06/di38riq/scans/scans/scene0591_01/scene0591_01.sens', output_path='/dss/mcmlscratch/06/di38riq/scans/scans/scene0591_01/frames', export_depth_images=False, export_color_images=True, export_poses=False, export_intrinsics=False)
+loading /dss/mcmlscratch/06/di38riq/scans/scans/scene0591_01/scene0591_01.sens...loaded!
+exporting 1724 color frames to /dss/mcmlscratch/06/di38riq/scans/scans/scene0591_01/frames/color
+  SUCCESS: Extracted 1724 frames
+Namespace(filename='/dss/mcmlscratch/06/di38riq/scans/scans/scene0593_00/scene0593_00.sens', output_path='/dss/mcmlscratch/06/di38riq/scans/scans/scene0593_00/frames', export_depth_images=False, export_color_images=True, export_poses=False, export_intrinsics=False)
+loading /dss/mcmlscratch/06/di38riq/scans/scans/scene0593_00/scene0593_00.sens...loaded!
+exporting 2297 color frames to /dss/mcmlscratch/06/di38riq/scans/scans/scene0593_00/frames/color
+  SUCCESS: Extracted 2297 frames
+Namespace(filename='/dss/mcmlscratch/06/di38riq/scans/scans/scene0598_02/scene0598_02.sens', output_path='/dss/mcmlscratch/06/di38riq/scans/scans/scene0598_02/frames', export_depth_images=False, export_color_images=True, export_poses=False, export_intrinsics=False)
+loading /dss/mcmlscratch/06/di38riq/scans/scans/scene0598_02/scene0598_02.sens...loaded!
+exporting 1607 color frames to /dss/mcmlscratch/06/di38riq/scans/scans/scene0598_02/frames/color
+  SUCCESS: Extracted 1607 frames
+Namespace(filename='/dss/mcmlscratch/06/di38riq/scans/scans/scene0608_00/scene0608_00.sens', output_path='/dss/mcmlscratch/06/di38riq/scans/scans/scene0608_00/frames', export_depth_images=False, export_color_images=True, export_poses=False, export_intrinsics=False)
+loading /dss/mcmlscratch/06/di38riq/scans/scans/scene0608_00/scene0608_00.sens...loaded!
+exporting 3388 color frames to /dss/mcmlscratch/06/di38riq/scans/scans/scene0608_00/frames/color
+  SUCCESS: Extracted 3388 frames
+Namespace(filename='/dss/mcmlscratch/06/di38riq/scans/scans/scene0616_01/scene0616_01.sens', output_path='/dss/mcmlscratch/06/di38riq/scans/scans/scene0616_01/frames', export_depth_images=False, export_color_images=True, export_poses=False, export_intrinsics=False)
+loading /dss/mcmlscratch/06/di38riq/scans/scans/scene0616_01/scene0616_01.sens...loaded!
+exporting 3329 color frames to /dss/mcmlscratch/06/di38riq/scans/scans/scene0616_01/frames/color
+  SUCCESS: Extracted 3329 frames
+Namespace(filename='/dss/mcmlscratch/06/di38riq/scans/scans/scene0621_00/scene0621_00.sens', output_path='/dss/mcmlscratch/06/di38riq/scans/scans/scene0621_00/frames', export_depth_images=False, export_color_images=True, export_poses=False, export_intrinsics=False)
+loading /dss/mcmlscratch/06/di38riq/scans/scans/scene0621_00/scene0621_00.sens...loaded!
+exporting 2675 color frames to /dss/mcmlscratch/06/di38riq/scans/scans/scene0621_00/frames/color
+  SUCCESS: Extracted 2675 frames
+Namespace(filename='/dss/mcmlscratch/06/di38riq/scans/scans/scene0629_01/scene0629_01.sens', output_path='/dss/mcmlscratch/06/di38riq/scans/scans/scene0629_01/frames', export_depth_images=False, export_color_images=True, export_poses=False, export_intrinsics=False)
+loading /dss/mcmlscratch/06/di38riq/scans/scans/scene0629_01/scene0629_01.sens...loaded!
+exporting 2669 color frames to /dss/mcmlscratch/06/di38riq/scans/scans/scene0629_01/frames/color
+  SUCCESS: Extracted 2669 frames
+Namespace(filename='/dss/mcmlscratch/06/di38riq/scans/scans/scene0633_00/scene0633_00.sens', output_path='/dss/mcmlscratch/06/di38riq/scans/scans/scene0633_00/frames', export_depth_images=False, export_color_images=True, export_poses=False, export_intrinsics=False)
+loading /dss/mcmlscratch/06/di38riq/scans/scans/scene0633_00/scene0633_00.sens...loaded!
+exporting 1596 color frames to /dss/mcmlscratch/06/di38riq/scans/scans/scene0633_00/frames/color
+  SUCCESS: Extracted 1596 frames
+Namespace(filename='/dss/mcmlscratch/06/di38riq/scans/scans/scene0643_00/scene0643_00.sens', output_path='/dss/mcmlscratch/06/di38riq/scans/scans/scene0643_00/frames', export_depth_images=False, export_color_images=True, export_poses=False, export_intrinsics=False)
+loading /dss/mcmlscratch/06/di38riq/scans/scans/scene0643_00/scene0643_00.sens...loaded!
+exporting 1934 color frames to /dss/mcmlscratch/06/di38riq/scans/scans/scene0643_00/frames/color
+  SUCCESS: Extracted 1934 frames
+  ERROR: Frame extraction failed
+Namespace(filename='/dss/mcmlscratch/06/di38riq/scans/scans/scene0647_00/scene0647_00.sens', output_path='/dss/mcmlscratch/06/di38riq/scans/scans/scene0647_00/frames', export_depth_images=False, export_color_images=True, export_poses=False, export_intrinsics=False)
+loading /dss/mcmlscratch/06/di38riq/scans/scans/scene0647_00/scene0647_00.sens...loaded!
+exporting 1094 color frames to /dss/mcmlscratch/06/di38riq/scans/scans/scene0647_00/frames/color
+  SUCCESS: Extracted 1094 frames
+Namespace(filename='/dss/mcmlscratch/06/di38riq/scans/scans/scene0648_00/scene0648_00.sens', output_path='/dss/mcmlscratch/06/di38riq/scans/scans/scene0648_00/frames', export_depth_images=False, export_color_images=True, export_poses=False, export_intrinsics=False)
+loading /dss/mcmlscratch/06/di38riq/scans/scans/scene0648_00/scene0648_00.sens...loaded!
+exporting 4187 color frames to /dss/mcmlscratch/06/di38riq/scans/scans/scene0648_00/frames/color
+  SUCCESS: Extracted 4187 frames
+Namespace(filename='/dss/mcmlscratch/06/di38riq/scans/scans/scene0651_02/scene0651_02.sens', output_path='/dss/mcmlscratch/06/di38riq/scans/scans/scene0651_02/frames', export_depth_images=False, export_color_images=True, export_poses=False, export_intrinsics=False)
+loading /dss/mcmlscratch/06/di38riq/scans/scans/scene0651_02/scene0651_02.sens...loaded!
+exporting 848 color frames to /dss/mcmlscratch/06/di38riq/scans/scans/scene0651_02/frames/color
+  SUCCESS: Extracted 848 frames
+Namespace(filename='/dss/mcmlscratch/06/di38riq/scans/scans/scene0653_00/scene0653_00.sens', output_path='/dss/mcmlscratch/06/di38riq/scans/scans/scene0653_00/frames', export_depth_images=False, export_color_images=True, export_poses=False, export_intrinsics=False)
+loading /dss/mcmlscratch/06/di38riq/scans/scans/scene0653_00/scene0653_00.sens...loaded!
+exporting 3879 color frames to /dss/mcmlscratch/06/di38riq/scans/scans/scene0653_00/frames/color
+  SUCCESS: Extracted 3879 frames
+Namespace(filename='/dss/mcmlscratch/06/di38riq/scans/scans/scene0658_00/scene0658_00.sens', output_path='/dss/mcmlscratch/06/di38riq/scans/scans/scene0658_00/frames', export_depth_images=False, export_color_images=True, export_poses=False, export_intrinsics=False)
+loading /dss/mcmlscratch/06/di38riq/scans/scans/scene0658_00/scene0658_00.sens...loaded!
+exporting 547 color frames to /dss/mcmlscratch/06/di38riq/scans/scans/scene0658_00/frames/color
+  SUCCESS: Extracted 547 frames
+Namespace(filename='/dss/mcmlscratch/06/di38riq/scans/scans/scene0663_00/scene0663_00.sens', output_path='/dss/mcmlscratch/06/di38riq/scans/scans/scene0663_00/frames', export_depth_images=False, export_color_images=True, export_poses=False, export_intrinsics=False)
+loading /dss/mcmlscratch/06/di38riq/scans/scans/scene0663_00/scene0663_00.sens...loaded!
+exporting 2946 color frames to /dss/mcmlscratch/06/di38riq/scans/scans/scene0663_00/frames/color
+  SUCCESS: Extracted 2946 frames
+Namespace(filename='/dss/mcmlscratch/06/di38riq/scans/scans/scene0664_02/scene0664_02.sens', output_path='/dss/mcmlscratch/06/di38riq/scans/scans/scene0664_02/frames', export_depth_images=False, export_color_images=True, export_poses=False, export_intrinsics=False)
+loading /dss/mcmlscratch/06/di38riq/scans/scans/scene0664_02/scene0664_02.sens...loaded!
+exporting 1243 color frames to /dss/mcmlscratch/06/di38riq/scans/scans/scene0664_02/frames/color
+  SUCCESS: Extracted 1243 frames
+Namespace(filename='/dss/mcmlscratch/06/di38riq/scans/scans/scene0665_00/scene0665_00.sens', output_path='/dss/mcmlscratch/06/di38riq/scans/scans/scene0665_00/frames', export_depth_images=False, export_color_images=True, export_poses=False, export_intrinsics=False)
+loading /dss/mcmlscratch/06/di38riq/scans/scans/scene0665_00/scene0665_00.sens...loaded!
+exporting 1036 color frames to /dss/mcmlscratch/06/di38riq/scans/scans/scene0665_00/frames/color
+  SUCCESS: Extracted 1036 frames
+Namespace(filename='/dss/mcmlscratch/06/di38riq/scans/scans/scene0671_01/scene0671_01.sens', output_path='/dss/mcmlscratch/06/di38riq/scans/scans/scene0671_01/frames', export_depth_images=False, export_color_images=True, export_poses=False, export_intrinsics=False)
+loading /dss/mcmlscratch/06/di38riq/scans/scans/scene0671_01/scene0671_01.sens...loaded!
+exporting 630 color frames to /dss/mcmlscratch/06/di38riq/scans/scans/scene0671_01/frames/color
+  SUCCESS: Extracted 630 frames
+Namespace(filename='/dss/mcmlscratch/06/di38riq/scans/scans/scene0684_01/scene0684_01.sens', output_path='/dss/mcmlscratch/06/di38riq/scans/scans/scene0684_01/frames', export_depth_images=False, export_color_images=True, export_poses=False, export_intrinsics=False)
+loading /dss/mcmlscratch/06/di38riq/scans/scans/scene0684_01/scene0684_01.sens...loaded!
+exporting 537 color frames to /dss/mcmlscratch/06/di38riq/scans/scans/scene0684_01/frames/color
+  SUCCESS: Extracted 537 frames
+Namespace(filename='/dss/mcmlscratch/06/di38riq/scans/scans/scene0685_00/scene0685_00.sens', output_path='/dss/mcmlscratch/06/di38riq/scans/scans/scene0685_00/frames', export_depth_images=False, export_color_images=True, export_poses=False, export_intrinsics=False)
+loading /dss/mcmlscratch/06/di38riq/scans/scans/scene0685_00/scene0685_00.sens...loaded!
+exporting 1958 color frames to /dss/mcmlscratch/06/di38riq/scans/scans/scene0685_00/frames/color
+  SUCCESS: Extracted 1958 frames
+Namespace(filename='/dss/mcmlscratch/06/di38riq/scans/scans/scene0686_00/scene0686_00.sens', output_path='/dss/mcmlscratch/06/di38riq/scans/scans/scene0686_00/frames', export_depth_images=False, export_color_images=True, export_poses=False, export_intrinsics=False)
+loading /dss/mcmlscratch/06/di38riq/scans/scans/scene0686_00/scene0686_00.sens...loaded!
+exporting 1523 color frames to /dss/mcmlscratch/06/di38riq/scans/scans/scene0686_00/frames/color
+  SUCCESS: Extracted 1523 frames
+Namespace(filename='/dss/mcmlscratch/06/di38riq/scans/scans/scene0693_00/scene0693_00.sens', output_path='/dss/mcmlscratch/06/di38riq/scans/scans/scene0693_00/frames', export_depth_images=False, export_color_images=True, export_poses=False, export_intrinsics=False)
+loading /dss/mcmlscratch/06/di38riq/scans/scans/scene0693_00/scene0693_00.sens...loaded!
+exporting 1732 color frames to /dss/mcmlscratch/06/di38riq/scans/scans/scene0693_00/frames/color
+  SUCCESS: Extracted 1732 frames
+Namespace(filename='/dss/mcmlscratch/06/di38riq/scans/scans/scene0695_00/scene0695_00.sens', output_path='/dss/mcmlscratch/06/di38riq/scans/scans/scene0695_00/frames', export_depth_images=False, export_color_images=True, export_poses=False, export_intrinsics=False)
+loading /dss/mcmlscratch/06/di38riq/scans/scans/scene0695_00/scene0695_00.sens...loaded!
+exporting 1820 color frames to /dss/mcmlscratch/06/di38riq/scans/scans/scene0695_00/frames/color
+  SUCCESS: Extracted 1820 frames
+Namespace(filename='/dss/mcmlscratch/06/di38riq/scans/scans/scene0696_01/scene0696_01.sens', output_path='/dss/mcmlscratch/06/di38riq/scans/scans/scene0696_01/frames', export_depth_images=False, export_color_images=True, export_poses=False, export_intrinsics=False)
+loading /dss/mcmlscratch/06/di38riq/scans/scans/scene0696_01/scene0696_01.sens...loaded!
+exporting 1914 color frames to /dss/mcmlscratch/06/di38riq/scans/scans/scene0696_01/frames/color
+  SUCCESS: Extracted 1914 frames
+Namespace(filename='/dss/mcmlscratch/06/di38riq/scans/scans/scene0697_01/scene0697_01.sens', output_path='/dss/mcmlscratch/06/di38riq/scans/scans/scene0697_01/frames', export_depth_images=False, export_color_images=True, export_poses=False, export_intrinsics=False)
+loading /dss/mcmlscratch/06/di38riq/scans/scans/scene0697_01/scene0697_01.sens...loaded!
+exporting 3090 color frames to /dss/mcmlscratch/06/di38riq/scans/scans/scene0697_01/frames/color
+  SUCCESS: Extracted 3090 frames
+Namespace(filename='/dss/mcmlscratch/06/di38riq/scans/scans/scene0699_00/scene0699_00.sens', output_path='/dss/mcmlscratch/06/di38riq/scans/scans/scene0699_00/frames', export_depth_images=False, export_color_images=True, export_poses=False, export_intrinsics=False)
+loading /dss/mcmlscratch/06/di38riq/scans/scans/scene0699_00/scene0699_00.sens...loaded!
+exporting 2197 color frames to /dss/mcmlscratch/06/di38riq/scans/scans/scene0699_00/frames/color
+  SUCCESS: Extracted 2197 frames
+Namespace(filename='/dss/mcmlscratch/06/di38riq/scans/scans/scene0700_02/scene0700_02.sens', output_path='/dss/mcmlscratch/06/di38riq/scans/scans/scene0700_02/frames', export_depth_images=False, export_color_images=True, export_poses=False, export_intrinsics=False)
+loading /dss/mcmlscratch/06/di38riq/scans/scans/scene0700_02/scene0700_02.sens...loaded!
+exporting 3664 color frames to /dss/mcmlscratch/06/di38riq/scans/scans/scene0700_02/frames/color
+  SUCCESS: Extracted 3664 frames
+Namespace(filename='/dss/mcmlscratch/06/di38riq/scans/scans/scene0701_00/scene0701_00.sens', output_path='/dss/mcmlscratch/06/di38riq/scans/scans/scene0701_00/frames', export_depth_images=False, export_color_images=True, export_poses=False, export_intrinsics=False)
+loading /dss/mcmlscratch/06/di38riq/scans/scans/scene0701_00/scene0701_00.sens...loaded!
+exporting 1011 color frames to /dss/mcmlscratch/06/di38riq/scans/scans/scene0701_00/frames/color
+  SUCCESS: Extracted 1011 frames
+Namespace(filename='/dss/mcmlscratch/06/di38riq/scans/scans/scene0702_02/scene0702_02.sens', output_path='/dss/mcmlscratch/06/di38riq/scans/scans/scene0702_02/frames', export_depth_images=False, export_color_images=True, export_poses=False, export_intrinsics=False)
+loading /dss/mcmlscratch/06/di38riq/scans/scans/scene0702_02/scene0702_02.sens...loaded!
+exporting 719 color frames to /dss/mcmlscratch/06/di38riq/scans/scans/scene0702_02/frames/color
+  SUCCESS: Extracted 719 frames

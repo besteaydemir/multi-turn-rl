@@ -19,6 +19,9 @@ export HF_HOME=/dss/dssmcmlfs01/pn34sa/pn34sa-dss-0000/aydemir
 # Set OpenMP threads to 1 (vLLM recommendation)
 export OMP_NUM_THREADS=1
 
+# CRITICAL: Fix CUDA multiprocessing issue
+export VLLM_WORKER_MULTIPROC_METHOD=spawn
+
 # Run vLLM backend with memory profiling
 echo "Starting vLLM memory profiling..."
 python compare_backends.py --backend vllm --num-questions 20 --num-steps 8 --use-wandb

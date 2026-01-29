@@ -18,6 +18,15 @@ Usage:
   python compare_backends.py --backend vllm --num-questions 5 --use-wandb
 """
 
+# CRITICAL: Set multiprocessing start method to 'spawn' BEFORE importing torch/CUDA
+# This fixes: "Cannot re-initialize CUDA in forked subprocess"
+import multiprocessing
+if __name__ == "__main__":
+    try:
+        multiprocessing.set_start_method('spawn', force=True)
+    except RuntimeError:
+        pass  # Already set
+
 import argparse
 import json
 import time
