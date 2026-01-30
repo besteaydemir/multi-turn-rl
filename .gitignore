@@ -27,6 +27,8 @@ test/
 tmp*/
 evaluation/compare_logs/
 
+
+data_download/
 # Data files
 *.ply
 *.csv
