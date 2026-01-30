@@ -4,10 +4,22 @@ Multi-turn spatial reasoning evaluation on VSI-Bench using Qwen3-VL.
 
 ## Quick Start
 
-**Installation:**
+**Environment Setup:**
 ```bash
+# Option 1: Automated setup (recommended for new clusters)
+./setup_env.sh
+
+# Option 2: Manual setup
+conda env create -f environment.yml
+conda activate env
+
+# Option 3: From scratch
+conda create -n env python=3.11 -y
+conda activate env
 pip install -r requirements.txt
 ```
+
+See [ENVIRONMENT.md](ENVIRONMENT.md) for detailed setup instructions and troubleshooting.
 
 **Run Evaluation:**
 ```bash
@@ -18,6 +30,8 @@ sbatch run_evaluation_sequential_continue.sh
 sbatch --array=1 run_evaluation_sequential_continue.sh
 
 # Test mode (5 questions locally)
+python evaluation/sequential.py --test --steps 8
+```
 python evaluation/sequential.py --test --steps 8
 ```
 

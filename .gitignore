@@ -10,10 +10,10 @@ build/
 .pytest_cache/
 .ipynb_checkpoints/
 
-# Virtual environments
+# Virtual environments (don't ignore environment export files)
 venv/
-env/
 ENV/
+# env/ is our conda environment name, don't ignore it as a directory
 
 # Experiment outputs and logs
 experiment_logs/
