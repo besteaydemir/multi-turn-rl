@@ -199,6 +199,7 @@ class VLLMBackend(InferenceBackend):
     ):
         from vllm import LLM, SamplingParams
         from transformers import AutoProcessor
+        import os
         
         self.model_id = model_id
         self.cache_dir = cache_dir
@@ -207,7 +208,6 @@ class VLLMBackend(InferenceBackend):
         print(f"[vLLM Backend] Settings: max_num_seqs={max_num_seqs}, dtype={dtype}")
         
         # Set environment variables for optimization
-        import os
         os.environ["HF_HOME"] = cache_dir
         os.environ["TRANSFORMERS_CACHE"] = cache_dir
         # Reduce CPU contention when running multiple vLLM instances
@@ -522,6 +522,191 @@ class VLLMVideoBackend(InferenceBackend):
             torch.cuda.empty_cache()
 
 
+class VideoR1Backend(InferenceBackend):
+    """
+    vLLM backend for Video-R1/Video-R1-7B model.
+    
+    Video-R1 is based on Qwen2.5-VL architecture but uses a reasoning-focused
+    prompt format with <think>/<answer> tags. It supports video input natively.
+    
+    Key differences from standard Qwen backends:
+    - Uses video modality (limit_mm_per_prompt={"video": 1, "image": 1})
+    - Larger context window (max_model_len=81920) for reasoning traces
+    - Temperature=0.1 with top_p=0.001 for near-deterministic generation
+    - Prompt uses QUESTION_TEMPLATE with <think></think> and <answer></answer>
+    """
+    
+    # Video-R1 prompt template
+    QUESTION_TEMPLATE = (
+        "{Question}\n"
+        "Please think about this question as if you were a human pondering deeply. "
+        "Engage in an internal dialogue using expressions such as 'let me think', 'wait', 'Hmm', 'oh, I see', 'let's break it down', etc, or other natural language thought expressions "
+        "It's encouraged to include self-reflection or verification in the reasoning process. "
+        "Provide your detailed reasoning between the <think> and </think> tags, and then give your final answer between the <answer> and </answer> tags."
+    )
+    
+    TYPE_TEMPLATE = {
+        "multiple choice": " Please provide only the single option letter (e.g., A, B, C, D, etc.) within the <answer> </answer> tags.",
+        "numerical": " Please provide the numerical value (e.g., 42 or 3.14) within the <answer> </answer> tags.",
+        "free-form": " Please provide your text answer within the <answer> </answer> tags.",
+    }
+
+    def __init__(
+        self,
+        model_id: str = "Video-R1/Video-R1-7B",
+        cache_dir: str = "/dss/dssmcmlfs01/pn34sa/pn34sa-dss-0000/aydemir",
+        max_model_len: int = 81920,
+        max_num_seqs: int = 4,
+        gpu_memory_utilization: float = 0.85,
+        tensor_parallel_size: int = 1,
+        dtype: str = "float16",
+        nframes: int = 16,
+    ):
+        from vllm import LLM, SamplingParams
+        from transformers import AutoProcessor, AutoTokenizer
+        import os
+        
+        self.model_id = model_id
+        self.cache_dir = cache_dir
+        self.nframes = nframes
+        
+        print(f"[Video-R1 Backend] Loading {model_id}...")
+        print(f"[Video-R1 Backend] max_model_len={max_model_len}, nframes={nframes}")
+        
+        os.environ["HF_HOME"] = cache_dir
+        os.environ["TRANSFORMERS_CACHE"] = cache_dir
+        os.environ["OMP_NUM_THREADS"] = "1"
+        
+        # Video-R1 config says Qwen2_5_VLImageProcessor but this transformers version
+        # doesn't have it as a standalone module. Patch the cached preprocessor_config
+        # to use the compatible Qwen2VLImageProcessor instead.
+        self._patch_preprocessor_config(model_id, cache_dir)
+        
+        # Load processor and tokenizer
+        self.processor = AutoProcessor.from_pretrained(model_id)
+        self.tokenizer = AutoTokenizer.from_pretrained(model_id)
+        self.tokenizer.padding_side = "left"
+        self.processor.tokenizer = self.tokenizer
+        
+        self.llm = LLM(
+            model=model_id,
+            max_model_len=max_model_len,
+            max_num_seqs=max_num_seqs,
+            gpu_memory_utilization=gpu_memory_utilization,
+            tensor_parallel_size=tensor_parallel_size,
+            dtype=dtype,
+            trust_remote_code=True,
+            download_dir=cache_dir,
+            limit_mm_per_prompt={"video": 1, "image": 1},
+        )
+        
+        self.default_sampling_params = SamplingParams(
+            temperature=0.1,
+            top_p=0.001,
+            max_tokens=1024,
+        )
+        
+        print("[Video-R1 Backend] Model loaded.")
+    
+    @staticmethod
+    def _patch_preprocessor_config(model_id: str, cache_dir: str):
+        """Patch preprocessor_config.json to replace Qwen2_5_VL* with Qwen2VL* classes.
+        
+        Video-R1 ships with Qwen2_5_VLImageProcessor/Qwen2_5_VLProcessor in its config,
+        but the installed transformers version doesn't have those as standalone modules.
+        The compatible Qwen2VLImageProcessor/Qwen2VLProcessor works identically.
+        """
+        import glob
+        import json
+        
+        # Find the cached preprocessor_config.json
+        pattern = f"{cache_dir}/models--{model_id.replace('/', '--')}/snapshots/*/preprocessor_config.json"
+        matches = glob.glob(pattern)
+        
+        for config_path in matches:
+            try:
+                with open(config_path, 'r') as f:
+                    config = json.load(f)
+                
+                changed = False
+                if config.get("image_processor_type") == "Qwen2_5_VLImageProcessor":
+                    config["image_processor_type"] = "Qwen2VLImageProcessor"
+                    changed = True
+                if config.get("processor_class") == "Qwen2_5_VLProcessor":
+                    config["processor_class"] = "Qwen2VLProcessor"
+                    changed = True
+                
+                if changed:
+                    with open(config_path, 'w') as f:
+                        json.dump(config, f, indent=2)
+                    print(f"[Video-R1 Backend] Patched preprocessor_config: Qwen2_5_VL -> Qwen2VL")
+            except Exception as e:
+                print(f"[Video-R1 Backend] Warning: Could not patch {config_path}: {e}")
+    
+    def format_question(self, question: str, choices: list = None, problem_type: str = "multiple choice") -> str:
+        """Format question with Video-R1 prompt template."""
+        if choices and len(choices) > 0:
+            choices_text = "\n".join([f"  {c}" for c in choices])
+            full_question = f"{question}\n\nOptions:\n{choices_text}"
+            ptype = "multiple choice"
+        else:
+            full_question = question
+            ptype = problem_type
+        
+        return self.QUESTION_TEMPLATE.format(Question=full_question) + self.TYPE_TEMPLATE.get(ptype, self.TYPE_TEMPLATE["free-form"])
+    
+    def generate(
+        self,
+        messages: List[Dict],
+        max_new_tokens: int = 1024,
+    ) -> str:
+        """Generate from pre-built messages (video frames already included)."""
+        from vllm import SamplingParams
+        from qwen_vl_utils import process_vision_info
+        
+        prompt = self.processor.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True
+        )
+        
+        image_inputs, video_inputs = process_vision_info(messages)
+        
+        sampling_params = SamplingParams(
+            temperature=0.1,
+            top_p=0.001,
+            max_tokens=max_new_tokens,
+        )
+        
+        llm_inputs = []
+        if video_inputs:
+            llm_inputs.append({
+                "prompt": prompt,
+                "multi_modal_data": {"video": video_inputs[0]},
+            })
+        else:
+            llm_inputs.append({"prompt": prompt})
+        
+        outputs = self.llm.generate(llm_inputs, sampling_params)
+        return outputs[0].outputs[0].text
+    
+    def generate_batch(
+        self,
+        batch_messages: List[List[Dict]],
+        max_new_tokens: int = 1024,
+    ) -> List[str]:
+        """Batch generation."""
+        results = []
+        for messages in batch_messages:
+            results.append(self.generate(messages, max_new_tokens))
+        return results
+    
+    def cleanup(self):
+        """Clean up resources."""
+        del self.llm
+        import torch
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+
 def create_inference_backend(
     backend: str = "hf",
     model_id: str = "Qwen/Qwen3-VL-8B-Instruct",
@@ -532,7 +717,8 @@ def create_inference_backend(
     Factory function to create the appropriate inference backend.
     
     Args:
-        backend: "hf" for HuggingFace, "vllm" for vLLM (image mode), "vllm_video" for vLLM video mode
+        backend: "hf" for HuggingFace, "vllm" for vLLM (image mode), 
+                 "vllm_video" for vLLM video mode, "video_r1" for Video-R1 model
         model_id: Model identifier
         cache_dir: Cache directory for model weights
         **kwargs: Additional arguments passed to the backend
@@ -546,5 +732,7 @@ def create_inference_backend(
         return VLLMBackend(model_id=model_id, cache_dir=cache_dir, **kwargs)
     elif backend.lower() == "vllm_video":
         return VLLMVideoBackend(model_id=model_id, cache_dir=cache_dir, **kwargs)
+    elif backend.lower() == "video_r1":
+        return VideoR1Backend(model_id=model_id, cache_dir=cache_dir, **kwargs)
     else:
-        raise ValueError(f"Unknown backend: {backend}. Choose 'hf', 'vllm', or 'vllm_video'.")
+        raise ValueError(f"Unknown backend: {backend}. Choose 'hf', 'vllm', 'vllm_video', or 'video_r1'.")

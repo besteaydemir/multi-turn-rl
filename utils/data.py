@@ -69,10 +69,12 @@ def load_vsi_bench_questions(question_types=None, dataset="arkitscenes"):
                        Common types: "route_planning", "object_rel_distance", 
                        "object_rel_direction_easy", "object_rel_direction_medium",
                        "object_rel_direction_hard"
-        dataset: Dataset name to filter by (default: "arkitscenes")
+        dataset: Dataset name to filter by. Options:
+                 - "arkitscenes", "scannet", "scannetpp" for individual datasets
+                 - "all" or "combined" for all datasets together
     
     Returns:
-        List of dicts with: scene_name, question, choices, answer_id, question_type, is_numerical
+        List of dicts with: scene_name, question, choices, answer_id, question_type, is_numerical, dataset
     """
     print("[INFO] 📥 Loading VSI-Bench dataset...")
     vsi = load_dataset("nyu-visionx/VSI-Bench", split="test")
@@ -85,21 +87,35 @@ def load_vsi_bench_questions(question_types=None, dataset="arkitscenes"):
     # Numerical question types (for MRA evaluation)
     numerical_types = {
         "object_counting",
-        "distance_estimation", 
-        "size_estimation",
+        "object_abs_distance", 
+        "object_size_estimation",
+        "room_size_estimation",
     }
     
-    filtered = vsi.filter(
-        lambda x: x["dataset"] == dataset
-                  and x["question_type"] in question_types
-    )
+    # Handle "all" or "combined" dataset option
+    if dataset in ("all", "combined"):
+        # Load all datasets
+        filtered = vsi.filter(
+            lambda x: x["question_type"] in question_types
+        )
+    else:
+        filtered = vsi.filter(
+            lambda x: x["dataset"] == dataset
+                      and x["question_type"] in question_types
+        )
     print(f"[INFO] ✅ Filtered to {len(filtered)} questions")
     
-    # Print breakdown by type
+    # Print breakdown by type and dataset
     for qt in question_types:
         count = len([x for x in filtered if x['question_type'] == qt])
         if count > 0:
             print(f"[INFO]    - {qt}: {count} questions")
+    
+    if dataset in ("all", "combined"):
+        # Print breakdown by source dataset
+        for ds in ["arkitscenes", "scannet", "scannetpp"]:
+            count = len([x for x in filtered if x['dataset'] == ds])
+            print(f"[INFO]    [{ds}]: {count} questions")
     
     questions = []
     for row in filtered:
@@ -111,7 +127,7 @@ def load_vsi_bench_questions(question_types=None, dataset="arkitscenes"):
             "answer_id": row.get("ground_truth", -1),
             "question_type": q_type,
             "is_numerical": q_type in numerical_types,
-            "dataset": dataset,  # Track which dataset this question is from
+            "dataset": row["dataset"],  # Use actual dataset from row
         })
     
     return questions
@@ -125,3 +141,14 @@ MCA_QUESTION_TYPES = [
     "object_rel_direction_medium",
     "object_rel_direction_hard",
 ]
+
+# Numerical answer question types
+NUMERICAL_QUESTION_TYPES = [
+    "object_counting",
+    "object_abs_distance",
+    "object_size_estimation",
+    "room_size_estimation",
+]
+
+# All question types supported by sequential pipeline (excludes temporal obj_appearance_order)
+ALL_SEQUENTIAL_QUESTION_TYPES = MCA_QUESTION_TYPES + NUMERICAL_QUESTION_TYPES

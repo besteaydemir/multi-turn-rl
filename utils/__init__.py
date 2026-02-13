@@ -28,6 +28,8 @@ from .data import (
     get_sky_direction_for_scene,
     load_vsi_bench_questions,
     MCA_QUESTION_TYPES,
+    NUMERICAL_QUESTION_TYPES,
+    ALL_SEQUENTIAL_QUESTION_TYPES,
 )
 from .common import (
     timestamp_str,
@@ -79,6 +81,8 @@ __all__ = [
     "get_sky_direction_for_scene",
     "load_vsi_bench_questions",
     "MCA_QUESTION_TYPES",
+    "NUMERICAL_QUESTION_TYPES",
+    "ALL_SEQUENTIAL_QUESTION_TYPES",
     # common
     "timestamp_str",
     # mesh

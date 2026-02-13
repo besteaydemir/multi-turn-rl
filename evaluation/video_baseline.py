@@ -47,6 +47,7 @@ CACHE_DIR = "/dss/dssmcmlfs01/pn34sa/pn34sa-dss-0000/aydemir"
 MODEL_ID = os.environ.get("MODEL_ID", "Qwen/Qwen3-VL-8B-Instruct")
 VIDEO_BASE_DIR = "/dss/mcmlscratch/06/di38riq/arkit_vsi/raw"
 SCANNET_VIDEO_BASE_DIR = "/dss/mcmlscratch/06/di38riq/scans/scans"
+SCANNETPP_VIDEO_BASE_DIR = "/dss/mcmlscratch/06/di38riq/data"
 METADATA_CSV = "/dss/dsshome1/06/di38riq/ARKitScenes/metadata.csv"
 
 IMAGE_WH = (640, 480)  # Same as sequential.py
@@ -98,6 +99,54 @@ def get_scannet_frames_dir(scene_id: str, base_dir: str = SCANNET_VIDEO_BASE_DIR
     return None
 
 
+def get_scannetpp_frames_dir(scene_id: str, base_dir: str = SCANNETPP_VIDEO_BASE_DIR) -> Optional[Path]:
+    """Find the resized_undistorted_images directory for a given ScanNet++ scene."""
+    frames_dir = Path(base_dir) / scene_id / "dslr" / "resized_undistorted_images"
+    if frames_dir.exists():
+        return frames_dir
+    return None
+
+
+def sample_scannet_frames(frames_dir: Path, num_frames: int) -> List[Path]:
+    """Sample num_frames equally-spaced frames from ScanNet scene."""
+    # Get all frames sorted
+    frame_files = sorted(frames_dir.glob("*.jpg"))
+    
+    if len(frame_files) == 0:
+        return []
+    
+    if len(frame_files) <= num_frames:
+        return frame_files
+    
+    # Sample equally spaced frames
+    indices = np.linspace(0, len(frame_files) - 1, num_frames, dtype=int)
+    sampled_frames = [frame_files[i] for i in indices]
+    
+    return sampled_frames
+
+
+def sample_scannetpp_frames(frames_dir: Path, num_frames: int) -> List[Path]:
+    """Sample num_frames equally-spaced frames from ScanNet++ scene."""
+    # Get all frames sorted (ScanNet++ uses .JPG extension)
+    frame_files = sorted(frames_dir.glob("*.JPG"))
+    
+    if len(frame_files) == 0:
+        # Try lowercase .jpg as fallback
+        frame_files = sorted(frames_dir.glob("*.jpg"))
+    
+    if len(frame_files) == 0:
+        return []
+    
+    if len(frame_files) <= num_frames:
+        return frame_files
+    
+    # Sample equally spaced frames
+    indices = np.linspace(0, len(frame_files) - 1, num_frames, dtype=int)
+    sampled_frames = [frame_files[i] for i in indices]
+    
+    return sampled_frames
+
+
 def sample_scannet_frames(frames_dir: Path, num_frames: int) -> List[Path]:
     """Sample num_frames equally-spaced frames from ScanNet frames directory."""
     # Get all .jpg frames sorted numerically
@@ -145,7 +194,7 @@ def resize_image(image_path: Path, video_id: str, target_size: Tuple[int, int] =
     """Load, rotate based on sky_direction (ARKitScenes only), and resize image.
     
     For ARKitScenes Left/Right rotations, the image becomes portrait so we use swapped dimensions.
-    For ScanNet, no rotation is applied.
+    For ScanNet and ScanNet++, no rotation is applied.
     """
     img = Image.open(image_path)
     
@@ -162,7 +211,7 @@ def resize_image(image_path: Path, video_id: str, target_size: Tuple[int, int] =
         else:
             final_size = target_size  # Keep (640, 480)
     else:
-        # ScanNet: no rotation needed, use standard size
+        # ScanNet/ScanNet++: no rotation needed, use standard size
         final_size = target_size
     
     # Resize to target size
@@ -172,11 +221,8 @@ def resize_image(image_path: Path, video_id: str, target_size: Tuple[int, int] =
     return img
 
 
-def build_video_prompt(question: str, choices: list, question_type: str, num_frames: int) -> str:
+def build_video_prompt(question: str, choices: list, question_type: str, num_frames: int, is_numerical: bool = False) -> str:
     """Build a simple prompt for video-based MCQ answering."""
-    
-    # Format choices
-    choices_text = "\n".join([f"  {choice}" for choice in choices])
     
     # Question type specific guidance
     if question_type == "route_planning":
@@ -185,42 +231,80 @@ def build_video_prompt(question: str, choices: list, question_type: str, num_fra
         task_hint = "Compare the distances between objects visible in the video."
     elif "object_rel_direction" in question_type:
         task_hint = "Determine the relative direction of objects from the specified viewpoint."
+    elif question_type == "object_counting":
+        task_hint = "Count how many instances of the target object appear across all frames. Be careful not to double-count the same object."
+    elif question_type == "object_abs_distance":
+        task_hint = "Estimate the distance between the two objects in meters using visual cues for scale."
+    elif question_type == "object_size_estimation":
+        task_hint = "Estimate the size of the specified object dimension in centimeters using surroundings for scale reference."
+    elif question_type == "room_size_estimation":
+        task_hint = "Estimate the total floor area of the room in square meters based on the video walkthrough."
+    elif question_type == "obj_appearance_order":
+        task_hint = "Determine the temporal order in which objects first appear as you move through the scene."
     else:
         task_hint = "Analyze the spatial relationships shown in the video."
-
+    
     prompt = f"""You are viewing {num_frames} frames from a video walkthrough of an indoor scene.
 
 {task_hint}
 
 **Question:** {question}
-
+"""
+    
+    # Add options or numerical instruction
+    if choices and len(choices) > 0:
+        choices_text = "\n".join([f"  {choice}" for choice in choices])
+        prompt += f"""
 **Answer Options:**
 {choices_text}
-
+"""
+        answer_format = '"answer": "<A, B, C, or D>"'
+    else:
+        # Numerical answer
+        if question_type == "object_counting":
+            prompt += "\n**Provide your answer as an integer (e.g., 3).**\n"
+            answer_format = '"answer": <integer>'
+        elif question_type in ["object_abs_distance", "room_size_estimation"]:
+            prompt += "\n**Provide your answer as a number with one decimal place (e.g., 1.5).**\n"
+            answer_format = '"answer": <number>'
+        elif question_type == "object_size_estimation":
+            prompt += "\n**Provide your answer in centimeters as an integer (e.g., 75).**\n"
+            answer_format = '"answer": <integer>'
+        else:
+            answer_format = '"answer": <your answer>'
+    
+    prompt += f"""
 **Instructions:**
 1. Observe the objects and spatial layout across all frames
-2. Determine which answer is correct
+2. Determine the answer
 3. Respond with a JSON object containing brief reasoning and your answer
 
 **Response format:**
-{{"reasoning": "<brief explanation>", "answer": "<A, B, C, or D>"}}
+{{"reasoning": "<brief explanation>", {answer_format}}}
 
 Be concise. Avoid repeating yourself."""
     return prompt
 
 
-def extract_answer(output_text: str) -> Optional[str]:
+def extract_answer(output_text: str, is_numerical: bool = False) -> Optional[str]:
     """Extract the answer from model output."""
     import re
     
     # Try to find JSON
     try:
         # Look for JSON pattern
-        json_match = re.search(r'\{[^{}]*"answer"\s*:\s*"([A-D])?"[^{}]*\}', output_text, re.DOTALL)
-        if json_match:
-            answer = json_match.group(1)
-            if answer and answer.upper() in "ABCD":
-                return answer.upper()
+        if is_numerical:
+            # Extract numerical answer
+            json_match = re.search(r'\{[^{}]*"answer"\s*:\s*([\d\.\-]+)[^{}]*\}', output_text, re.DOTALL)
+            if json_match:
+                return json_match.group(1)
+        else:
+            # Extract letter answer
+            json_match = re.search(r'\{[^{}]*"answer"\s*:\s*"([A-D])?"[^{}]*\}', output_text, re.DOTALL)
+            if json_match:
+                answer = json_match.group(1)
+                if answer and answer.upper() in "ABCD":
+                    return answer.upper()
         
         # Try parsing as JSON
         import json
@@ -254,6 +338,7 @@ def run_single_question(
     num_frames: int,
     question_type: str,
     dataset: str = "arkitscenes",
+    is_numerical: bool = False,
 ) -> Tuple[Optional[str], float, int]:
     """Run video baseline for a single question."""
     global inference_backend
@@ -265,7 +350,13 @@ def run_single_question(
     out_dir.mkdir(parents=True, exist_ok=True)
     
     # Find video frames based on dataset
-    if dataset == "scannet":
+    if dataset == "scannetpp":
+        video_dir = get_scannetpp_frames_dir(scene_id)
+        if video_dir is None:
+            print(f"[Q{question_id:03d}] ❌ No frames found for ScanNet++ scene {scene_id}")
+            return None, time.time() - start_time, 0
+        frame_paths = sample_scannetpp_frames(video_dir, num_frames)
+    elif dataset == "scannet":
         video_dir = get_scannet_frames_dir(scene_id)
         if video_dir is None:
             print(f"[Q{question_id:03d}] ❌ No frames found for ScanNet scene {scene_id}")
@@ -286,7 +377,7 @@ def run_single_question(
     print(f"[Q{question_id:03d}] 📹 Sampled {actual_frames} frames from {video_dir.name}")
     
     # Build prompt
-    prompt = build_video_prompt(question, choices, question_type, actual_frames)
+    prompt = build_video_prompt(question, choices, question_type, actual_frames, is_numerical=is_numerical)
     
     # Save prompt for debugging
     with open(out_dir / "prompt.txt", "w") as f:
@@ -324,7 +415,7 @@ def run_single_question(
         f.write(output_text)
     
     # Extract answer
-    answer = extract_answer(output_text)
+    answer = extract_answer(output_text, is_numerical=is_numerical)
     
     elapsed_time = time.time() - start_time
     print(f"[Q{question_id:03d}] ✅ Answer: {answer} ({elapsed_time:.1f}s)")
@@ -347,28 +438,56 @@ def run_single_question(
     return answer, elapsed_time, actual_frames
 
 
-def load_vsi_bench_questions(dataset="arkitscenes"):
-    """Load VSI-Bench MCQ questions."""
-    if dataset == "combined":
-        # Load both datasets
-        arkit = _load_vsi_bench_questions(question_types=MCA_QUESTION_TYPES, dataset="arkitscenes")
-        scannet = _load_vsi_bench_questions(question_types=MCA_QUESTION_TYPES, dataset="scannet")
-        return arkit + scannet
-    return _load_vsi_bench_questions(question_types=MCA_QUESTION_TYPES, dataset=dataset)
+def load_vsi_bench_questions(dataset="arkitscenes", include_numerical=False, include_temporal=True):
+    """Load VSI-Bench questions.
+    
+    Args:
+        dataset: Dataset name. Use "all" or "combined" for all datasets.
+        include_numerical: Whether to include numerical answer types
+        include_temporal: Whether to include temporal types (obj_appearance_order)
+    """
+    question_types = MCA_QUESTION_TYPES.copy()
+    
+    if include_numerical:
+        from utils import NUMERICAL_QUESTION_TYPES
+        question_types.extend(NUMERICAL_QUESTION_TYPES)
+    
+    if include_temporal:
+        question_types.append("obj_appearance_order")
+    
+    # _load_vsi_bench_questions now handles "all" and "combined" internally
+    return _load_vsi_bench_questions(question_types=question_types, dataset=dataset)
 
 
-def main(num_frames: int, split: int, num_splits: int, max_questions: Optional[int] = None, dataset="arkitscenes"):
+def main(num_frames: int, split: int, num_splits: int, max_questions: Optional[int] = None, dataset="arkitscenes", test_mode=False, backend="hf", question_types=None, include_temporal=False):
     """Main evaluation loop."""
     global inference_backend
     
     print("\n" + "=" * 80)
     print(f"🎬 VIDEO BASELINE EVALUATION - {dataset.upper()} ({num_frames} frames)")
-    print(f"   Split {split}/{num_splits}")
+    if test_mode:
+        print(f"   🧪 TEST MODE - Running {max_questions or 3} questions to 'test' folder")
+    else:
+        print(f"   Split {split}/{num_splits}")
     print("=" * 80 + "\n")
     
-    # Load questions
-    questions = load_vsi_bench_questions(dataset=dataset)
+    # Load questions with appropriate types
+    # _load_vsi_bench_questions now handles "all" and "combined" internally
+    if question_types is not None:
+        questions = _load_vsi_bench_questions(question_types=question_types, dataset=dataset)
+    else:
+        questions = load_vsi_bench_questions(dataset=dataset, include_numerical=False, include_temporal=include_temporal)
     total_questions = len(questions)
+    
+    # Apply question filter if specified via environment variable
+    filter_file = os.environ.get("QUESTION_FILTER_FILE")
+    if filter_file and os.path.exists(filter_file):
+        print(f"[INFO] Applying question filter from: {filter_file}")
+        with open(filter_file, 'r') as f:
+            allowed_scenes = set(json.load(f))
+        questions = [q for q in questions if q["scene_name"] in allowed_scenes]
+        print(f"[INFO] Filtered to {len(questions)} questions (from {total_questions})")
+        total_questions = len(questions)
     
     # Calculate split range
     questions_per_split = total_questions // num_splits
@@ -388,23 +507,34 @@ def main(num_frames: int, split: int, num_splits: int, max_questions: Optional[i
         print(f"[INFO] Limited to {max_questions} questions\n")
     
     # Create experiment directory
-    EXPERIMENT_BASE = Path("/dss/dssmcmlfs01/pn34sa/pn34sa-dss-0000/aydemir/experiment_logs")
-    exp_timestamp = timestamp_str()
-    model_name = MODEL_ID.split("/")[-1].replace("-Instruct", "")  # e.g., "Qwen3-VL-8B"
-    model_size = "4B" if "4B" in model_name else "8B"
-    exp_dir = EXPERIMENT_BASE / "Video" / model_size / f"{exp_timestamp}_video_{model_name}_{dataset}_{num_frames}frames_split{split}of{num_splits}"
-    exp_dir.mkdir(parents=True, exist_ok=True)
+    if test_mode:
+        exp_dir = Path("test") / f"video_{dataset}"
+        exp_dir.mkdir(parents=True, exist_ok=True)
+    else:
+        from datetime import datetime
+        EXPERIMENT_BASE = Path("/dss/dssmcmlfs01/pn34sa/pn34sa-dss-0000/aydemir/experiment_logs")
+        date_folder = datetime.now().strftime("%Y-%m-%d")
+        exp_timestamp = timestamp_str()
+        model_name = MODEL_ID.split("/")[-1].replace("-Instruct", "")  # e.g., "Qwen3-VL-8B"
+        model_size = "4B" if "4B" in model_name else "8B"
+        frames_folder = f"{num_frames}_frames"
+        exp_dir = EXPERIMENT_BASE / "Video" / model_size / frames_folder / date_folder / f"{exp_timestamp}_video_{model_name}_{dataset}_{num_frames}frames_split{split}of{num_splits}"
+        exp_dir.mkdir(parents=True, exist_ok=True)
     
     print(f"[INFO] 📁 Output: {exp_dir.resolve()}\n")
     
-    # Initialize backend - using vllm with increased image limit for multi-frame support
-    print("[INFO] Initializing vLLM backend (multi-image mode for video frames)...")
-    inference_backend = create_inference_backend(
-        backend="vllm",
-        model_id=MODEL_ID,
-        cache_dir=CACHE_DIR,
-        max_images=48,  # Support up to 48 frames (extra headroom)
-    )
+    # Initialize backend
+    print(f"[INFO] Initializing {backend.upper()} backend (multi-image mode for video frames)...")
+    backend_kwargs = {
+        "backend": backend,
+        "model_id": MODEL_ID,
+        "cache_dir": CACHE_DIR,
+    }
+    # vLLM backends support max_images parameter
+    if backend.lower() in ["vllm", "vllm_video"]:
+        backend_kwargs["max_images"] = 48  # Support up to 48 frames (extra headroom)
+    
+    inference_backend = create_inference_backend(**backend_kwargs)
     print("[INFO] Backend ready.\n")
     
     # Track results
@@ -415,8 +545,8 @@ def main(num_frames: int, split: int, num_splits: int, max_questions: Optional[i
     for local_idx, q_data in enumerate(split_questions, 1):
         global_idx = start_idx + local_idx
         scene_id = q_data["scene_name"]
-        # Use the question's source dataset for combined mode
-        q_dataset = q_data.get("dataset", dataset) if dataset == "combined" else dataset
+        # Each question stores its source dataset - use that for combined/all mode
+        q_dataset = q_data.get("dataset", dataset)
         
         print(f"\n{'='*60}")
         print(f"Question {global_idx} (local {local_idx}/{len(split_questions)})")
@@ -433,6 +563,7 @@ def main(num_frames: int, split: int, num_splits: int, max_questions: Optional[i
                 num_frames=num_frames,
                 question_type=q_data["question_type"],
                 dataset=q_dataset,
+                is_numerical=q_data.get("is_numerical", False),
             )
         except Exception as e:
             print(f"[ERROR] Failed: {e}")
@@ -510,18 +641,42 @@ def main(num_frames: int, split: int, num_splits: int, max_questions: Optional[i
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Video baseline evaluation for VSI-Bench")
-    parser.add_argument("--dataset", type=str, default="arkitscenes", choices=["arkitscenes", "scannet", "combined"],
-                       help="Dataset to evaluate on (default: arkitscenes, use 'combined' for both)")
+    parser.add_argument("--backend", type=str, default="vllm", choices=["hf", "vllm"],
+                       help="Inference backend: 'vllm' (default, faster) or 'hf' (HuggingFace)")
+    parser.add_argument("--dataset", type=str, default="arkitscenes", 
+                       choices=["arkitscenes", "scannet", "scannetpp", "all", "combined"],
+                       help="Dataset to evaluate on. Use 'all' for all datasets combined.")
     parser.add_argument("--num-frames", type=int, default=8, choices=[4, 8, 16, 32],
                        help="Number of frames to sample (4, 8, 16, or 32)")
     parser.add_argument("--split", type=int, default=1, help="Which split to run (1-indexed)")
     parser.add_argument("--num-splits", type=int, default=1, help="Total number of splits")
     parser.add_argument("--max-questions", type=int, default=None, help="Max questions to process")
+    parser.add_argument("--test", action="store_true", help="Test mode: run limited questions to 'test' folder")
+    parser.add_argument("--question-types", type=str, default="mcq", choices=["mcq", "numerical", "temporal", "all"],
+                       help="Question types: 'mcq' (default), 'numerical', 'temporal' (obj_appearance_order), or 'all'")
     args = parser.parse_args()
     
-    if args.split < 1 or args.split > args.num_splits:
+    # Map question-types argument to actual types
+    include_temporal = False
+    if args.question_types == "mcq":
+        question_types = MCA_QUESTION_TYPES
+    elif args.question_types == "numerical":
+        from utils import NUMERICAL_QUESTION_TYPES
+        question_types = NUMERICAL_QUESTION_TYPES
+    elif args.question_types == "temporal":
+        question_types = ["obj_appearance_order"]
+        include_temporal = True
+    else:  # all
+        from utils import ALL_SEQUENTIAL_QUESTION_TYPES
+        question_types = ALL_SEQUENTIAL_QUESTION_TYPES + ["obj_appearance_order"]
+        include_temporal = True
+    
+    if not args.test and (args.split < 1 or args.split > args.num_splits):
         print(f"[ERROR] Invalid split: {args.split}")
         exit(1)
+    
+    if args.test and args.max_questions is None:
+        args.max_questions = 3  # Default to 3 questions in test mode
     
     main(
         num_frames=args.num_frames,
@@ -529,4 +684,8 @@ if __name__ == "__main__":
         num_splits=args.num_splits,
         max_questions=args.max_questions,
         dataset=args.dataset,
+        test_mode=args.test,
+        backend=args.backend,
+        question_types=question_types,
+        include_temporal=include_temporal,
     )

@@ -1,0 +1,63 @@
+# RL Training Configuration - End-to-End Test
+# Quick test with 1 update, 2 episodes
+
+# =============================================================================
+# MODEL
+# =============================================================================
+model_id: "/dss/dssmcmlfs01/pn34sa/pn34sa-dss-0000/aydemir/models--Qwen--Qwen3-VL-4B-Instruct/snapshots/ebb281ec70b05090aa6165b016eac8ec08e71b17"
+cache_dir: "/dss/dssmcmlfs01/pn34sa/pn34sa-dss-0000/aydemir"
+
+# =============================================================================
+# EPISODE SETTINGS
+# =============================================================================
+max_turns: 3              # 3 views per episode (faster testing)
+max_new_tokens: 512       # Max tokens per generation
+
+# =============================================================================
+# TRAINING
+# =============================================================================
+num_updates: 1            # Just 1 update for testing
+episodes_per_update: 2    # 2 episodes (trajectories) per update
+learning_rate: 1e-5
+batch_size: 2             # Small batch for testing
+save_interval: 1          # Save every update
+
+# =============================================================================
+# ALGORITHM
+# =============================================================================
+use_ppo: false            # Use REINFORCE for simplicity
+kl_coef: 0.0              # No KL penalty
+entropy_coef: 0.0         # No entropy bonus
+
+# =============================================================================
+# DATASET & SCENE LOADING
+# =============================================================================
+dataset: "scannetpp"      # Use ScanNet++
+use_scene_loader: true    # Enable scene rendering
+render_output_dir: "/dss/dsshome1/06/di38riq/rl_multi_turn/test_renders"  # Directory for rendered images
+
+# =============================================================================
+# WEIGHT SYNCHRONIZATION
+# =============================================================================
+weight_sync: "checkpoint" # Use Option A (save/reload)
+weight_sync_interval: 1   # Sync after every update
+
+# =============================================================================
+# CHECKPOINTING
+# =============================================================================
+resume: false             # Start fresh
+checkpoint_path: null
+
+# =============================================================================
+# OUTPUT
+# =============================================================================
+output_dir: "/dss/dssmcmlfs01/pn34sa/pn34sa-dss-0000/aydemir/rl_multiturn_v2_test"
+wandb_project: "rl-view-selection-test"
+wandb_entity: null
+no_wandb: true            # Disable W&B for testing
+
+# =============================================================================
+# OTHER
+# =============================================================================
+seed: 42
+debug: false

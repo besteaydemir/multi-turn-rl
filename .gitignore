@@ -26,13 +26,14 @@ analysis/outputs/
 test/
 tmp*/
 evaluation/compare_logs/
-
+trajectory_test_run/
 
 data_download/
 # Data files
 *.ply
 *.csv
 *.npy
+*.pdf
 *.npz
 *.pkl
 *.json

@@ -10,6 +10,7 @@ Collects all data needed for training:
 - Parsed actions
 
 No gradients are computed during rollout.
+Supports weight synchronization from HuggingFace model.
 """
 
 import time
@@ -19,6 +20,8 @@ from dataclasses import dataclass, field
 from typing import List, Optional, Dict, Any, Callable, Tuple
 from pathlib import Path
 import json
+import tempfile
+import shutil
 
 from .data_structures import Turn, Trajectory, Action, CameraPose, FinalAnswer
 from .output_parser import (
@@ -50,7 +53,7 @@ class RolloutConfig:
     # vLLM settings
     model_id: str = "Qwen/Qwen3-VL-4B-Instruct"
     tensor_parallel_size: int = 1
-    gpu_memory_utilization: float = 0.9
+    gpu_memory_utilization: float = 0.45  # Reduced: HF model uses ~45% of GPU
     
     # Paths
     cache_dir: str = "/dss/dssmcmlfs01/pn34sa/pn34sa-dss-0000/aydemir"
@@ -132,6 +135,7 @@ class VLLMRolloutEngine:
             trust_remote_code=True,
             download_dir=self.config.cache_dir,
             limit_mm_per_prompt={"image": self.config.max_turns + 1, "video": 0},
+            max_model_len=32768,  # Support up to 16 images (~24k) + text (~8k)
         )
         
         self._processor = AutoProcessor.from_pretrained(
@@ -527,6 +531,115 @@ class VLLMRolloutEngine:
     def get_stats(self) -> Dict[str, Any]:
         """Get rollout statistics."""
         return self.stats.copy()
+    
+    # =========================================================================
+    # WEIGHT SYNCHRONIZATION
+    # =========================================================================
+    
+    def sync_weights_from_checkpoint(
+        self,
+        checkpoint_path: Path,
+        cleanup: bool = True,
+    ) -> bool:
+        """
+        Reload vLLM model from checkpoint (Option A: Save/Reload).
+        
+        This is the most reliable method but requires reinitializing vLLM.
+        
+        Args:
+            checkpoint_path: Path to saved HuggingFace checkpoint
+            cleanup: Whether to clean up checkpoint after loading
+            
+        Returns:
+            True if successful
+        """
+        checkpoint_path = Path(checkpoint_path)
+        
+        if not checkpoint_path.exists():
+            print(f"[RolloutEngine] Checkpoint not found: {checkpoint_path}")
+            return False
+        
+        print(f"[RolloutEngine] Reloading model from {checkpoint_path}")
+        
+        try:
+            # Clear existing vLLM instance
+            if self._llm is not None:
+                del self._llm
+                self._llm = None
+                
+                # Force garbage collection to free GPU memory
+                import gc
+                gc.collect()
+                torch.cuda.empty_cache()
+            
+            # Update model path
+            old_model_id = self.config.model_id
+            self.config.model_id = str(checkpoint_path)
+            
+            # Reinitialize vLLM with new weights
+            self._init_vllm()
+            
+            print(f"[RolloutEngine] Model reloaded from checkpoint")
+            
+            # Optionally cleanup checkpoint
+            if cleanup:
+                try:
+                    shutil.rmtree(checkpoint_path)
+                    print(f"[RolloutEngine] Cleaned up checkpoint: {checkpoint_path}")
+                except Exception as e:
+                    print(f"[RolloutEngine] Failed to cleanup checkpoint: {e}")
+            
+            return True
+            
+        except Exception as e:
+            print(f"[RolloutEngine] Failed to reload model: {e}")
+            # Try to restore original model
+            self.config.model_id = old_model_id
+            self._init_vllm()
+            return False
+    
+    def sync_weights_direct(
+        self,
+        state_dict: Dict[str, torch.Tensor],
+    ) -> bool:
+        """
+        Update vLLM weights directly (Option B: Direct Update).
+        
+        NOTE: vLLM's weight update API is experimental and may not work
+        for all model types. Falls back to checkpoint method if unavailable.
+        
+        Args:
+            state_dict: Model state dict from HuggingFace model
+            
+        Returns:
+            True if successful
+        """
+        if self._llm is None:
+            print("[RolloutEngine] vLLM not initialized, cannot update weights")
+            return False
+        
+        try:
+            # Check if vLLM supports weight updates
+            # This is an experimental feature in vLLM
+            if hasattr(self._llm, 'update_weights'):
+                print("[RolloutEngine] Using vLLM update_weights API")
+                self._llm.update_weights(state_dict)
+                return True
+            elif hasattr(self._llm, 'model') and hasattr(self._llm.model, 'load_state_dict'):
+                print("[RolloutEngine] Using model.load_state_dict")
+                self._llm.model.load_state_dict(state_dict)
+                return True
+            else:
+                print("[RolloutEngine] Direct weight update not supported, use checkpoint method")
+                return False
+                
+        except Exception as e:
+            print(f"[RolloutEngine] Direct weight update failed: {e}")
+            return False
+    
+    def get_model_path(self) -> str:
+        """Get current model path/ID."""
+        return self.config.model_id
 
 
 # ============================================================================
@@ -606,3 +719,60 @@ class MockRolloutEngine:
         self.stats["episodes_total"] += 1
         
         return trajectory
+    
+    def collect_batch(
+        self,
+        questions: List[Dict[str, Any]],
+        render_fn: Optional[Callable] = None,
+    ) -> List[Trajectory]:
+        """
+        Collect trajectories for a batch of questions (mock version).
+        
+        Args:
+            questions: List of dicts with keys:
+                - question: str
+                - choices: List[str]
+                - scene_id: str
+                - ground_truth: Optional[str]
+            render_fn: Ignored in mock version
+                
+        Returns:
+            List of Trajectory objects
+        """
+        trajectories = []
+        
+        for i, q in enumerate(questions):
+            traj = self.collect_trajectory(
+                question=q["question"],
+                choices=q.get("choices", []),
+                scene_id=q["scene_id"],
+                ground_truth=q.get("ground_truth"),
+            )
+            trajectories.append(traj)
+        
+        return trajectories
+    
+    def get_stats(self) -> Dict[str, Any]:
+        """Get rollout statistics."""
+        return self.stats.copy()
+    
+    def sync_weights_from_checkpoint(
+        self,
+        checkpoint_path: Path,
+        cleanup: bool = True,
+    ) -> bool:
+        """Mock weight sync (does nothing)."""
+        print("[MockRolloutEngine] Mock weight sync from checkpoint")
+        return True
+    
+    def sync_weights_direct(
+        self,
+        state_dict: Dict[str, torch.Tensor],
+    ) -> bool:
+        """Mock weight sync (does nothing)."""
+        print("[MockRolloutEngine] Mock direct weight sync")
+        return True
+    
+    def get_model_path(self) -> str:
+        """Get current model path/ID."""
+        return "mock"

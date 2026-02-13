@@ -7,42 +7,58 @@ import open3d as o3d
 # Default mesh base directories
 DEFAULT_MESH_BASE_DIR = "/dss/mcmlscratch/06/di38riq/arkit_vsi/raw"
 DEFAULT_SCANNET_MESH_BASE_DIR = "/dss/mcmlscratch/06/di38riq/scans"
+DEFAULT_SCANNETPP_MESH_BASE_DIR = "/dss/mcmlscratch/06/di38riq/data"
 
 # Mesh cache to avoid reloading the same mesh multiple times
 _mesh_cache = {}
 
 
-def find_mesh_file(scene_id, mesh_base_dir=DEFAULT_MESH_BASE_DIR, dataset="arkitscenes"):
+def find_mesh_file(scene_id, mesh_base_dir=None, dataset="arkitscenes"):
     """
     Find a mesh file for the given scene_id.
     
     For ARKitScenes: Searches in both Validation and Training splits.
     For ScanNet: Searches in scans directory for scene{id}_vh_clean_2.ply
+    For ScanNet++: Searches in data directory for {scene_id}/scans/mesh_aligned_0.05.ply
     
     Args:
-        scene_id: Scene ID (video_id string for ARKit, scene0XXX_XX for ScanNet)
-        mesh_base_dir: Base directory for mesh files
-        dataset: Dataset name ("arkitscenes" or "scannet")
+        scene_id: Scene ID (video_id string for ARKit, scene0XXX_XX for ScanNet, hash for ScanNet++)
+        mesh_base_dir: Base directory for mesh files. If None, uses dataset-specific default.
+        dataset: Dataset name ("arkitscenes", "scannet", or "scannetpp")
     
     Returns:
         Path to mesh file, or None if not found
     """
-    if dataset == "scannet":
+    if dataset == "scannetpp":
+        # Use dataset-specific default if not provided
+        base_dir = mesh_base_dir if mesh_base_dir else DEFAULT_SCANNETPP_MESH_BASE_DIR
+        # ScanNet++ format: 0d2ee665be/scans/mesh_aligned_0.05.ply
+        scene_id_str = str(scene_id)
+        mesh_path = Path(base_dir) / scene_id_str / "scans" / "mesh_aligned_0.05.ply"
+        if mesh_path.exists():
+            return mesh_path
+        print(f"[WARN] ScanNet++ mesh file not found for scene {scene_id} at {mesh_path}")
+        return None
+    elif dataset == "scannet":
+        # Use dataset-specific default if not provided
+        base_dir = mesh_base_dir if mesh_base_dir else DEFAULT_SCANNET_MESH_BASE_DIR
         # ScanNet format: scene0568_00/scene0568_00_vh_clean_2.ply
         scene_id_str = str(scene_id)
-        mesh_path = Path(mesh_base_dir) / scene_id_str / f"{scene_id_str}_vh_clean_2.ply"
+        mesh_path = Path(base_dir) / scene_id_str / f"{scene_id_str}_vh_clean_2.ply"
         if mesh_path.exists():
             return mesh_path
         print(f"[WARN] ScanNet mesh file not found for scene {scene_id} at {mesh_path}")
         return None
     else:
+        # Use ARKitScenes default if not provided
+        base_dir = mesh_base_dir if mesh_base_dir else DEFAULT_MESH_BASE_DIR
         # ARKitScenes format: Training/42897151/42897151_3dod_mesh.ply
         video_id = str(scene_id)
         for split in ["Validation", "Training"]:
-            mesh_path = Path(mesh_base_dir) / split / video_id / f"{video_id}_3dod_mesh.ply"
+            mesh_path = Path(base_dir) / split / video_id / f"{video_id}_3dod_mesh.ply"
             if mesh_path.exists():
                 return mesh_path
-        print(f"[WARN] ARKitScenes mesh file not found for scene {scene_id} in {mesh_base_dir}")
+        print(f"[WARN] ARKitScenes mesh file not found for scene {scene_id} in {base_dir}")
         return None
 
 

@@ -23,6 +23,7 @@ from pathlib import Path
 import time
 import json
 import copy
+import shutil
 
 from .data_structures import Trajectory, Turn
 
@@ -217,6 +218,7 @@ class RLTrainer:
         model: nn.Module,
         config: TrainerConfig,
         tokenizer = None,
+        original_model_path: Optional[str] = None,
     ):
         """
         Initialize trainer.
@@ -225,10 +227,12 @@ class RLTrainer:
             model: Policy model (must be trainable, not vLLM)
             config: TrainerConfig with hyperparameters
             tokenizer: Tokenizer for computing log probabilities
+            original_model_path: Path to original model (for copying processor files)
         """
         self.model = model
         self.config = config
         self.tokenizer = tokenizer
+        self.original_model_path = original_model_path
         
         # Move model to device
         self.model = self.model.to(config.device)
@@ -504,6 +508,79 @@ class RLTrainer:
             json.dump(state, f, indent=2)
         
         print(f"[Trainer] Saved checkpoint to {path}")
+        
+        return path
+    
+    def save_hf_checkpoint(self, path: Optional[Path] = None) -> Path:
+        """
+        Save model in HuggingFace format for vLLM loading.
+        
+        This saves the model in a format that vLLM can load directly.
+        Used for weight synchronization (Option A).
+        
+        Args:
+            path: Optional path for checkpoint
+            
+        Returns:
+            Path to saved checkpoint
+        """
+        if path is None:
+            path = self.output_dir / f"hf_checkpoint_step_{self.global_step}"
+        
+        path = Path(path)
+        path.mkdir(parents=True, exist_ok=True)
+        
+        print(f"[Trainer] Saving HuggingFace checkpoint to {path}")
+        
+        # Use model's save_pretrained if available
+        if hasattr(self.model, 'save_pretrained'):
+            self.model.save_pretrained(path)
+        else:
+            # Fallback: save state dict
+            torch.save(self.model.state_dict(), path / "pytorch_model.bin")
+        
+        # Also save tokenizer/processor if available
+        if self.tokenizer is not None and hasattr(self.tokenizer, 'save_pretrained'):
+            self.tokenizer.save_pretrained(path)
+        
+        # Copy processor config files from original model path
+        # These are needed by vLLM for vision-language models
+        if self.original_model_path is not None:
+            original_path = Path(self.original_model_path)
+            processor_files = [
+                "preprocessor_config.json",
+                "chat_template.json", 
+                "processor_config.json",
+                "image_processor_config.json",
+                "special_tokens_map.json",
+                "tokenizer_config.json",
+                "tokenizer.json",
+                "merges.txt",
+                "vocab.json",
+            ]
+            
+            for fname in processor_files:
+                src = original_path / fname
+                if src.exists():
+                    dst = path / fname
+                    if not dst.exists():  # Don't overwrite if tokenizer already saved it
+                        shutil.copy2(src, dst)
+                        print(f"[Trainer] Copied {fname} from original model")
+        
+        print(f"[Trainer] HuggingFace checkpoint saved to {path}")
+        
+        return path
+    
+    def get_state_dict(self) -> Dict[str, torch.Tensor]:
+        """
+        Get model state dict for direct weight sync.
+        
+        Used for weight synchronization (Option B).
+        
+        Returns:
+            Model state dict
+        """
+        return self.model.state_dict()
     
     def load_checkpoint(self, path: Path):
         """Load model checkpoint."""
@@ -524,6 +601,43 @@ class RLTrainer:
         
         print(f"[Trainer] Loaded checkpoint from {path} (step {self.global_step})")
     
+    def find_latest_checkpoint(self) -> Optional[Path]:
+        """
+        Find the latest checkpoint in output directory.
+        
+        Returns:
+            Path to latest checkpoint or None
+        """
+        checkpoints = list(self.output_dir.glob("checkpoint_step_*"))
+        if not checkpoints:
+            return None
+        
+        # Sort by step number
+        def get_step(p):
+            try:
+                return int(p.name.split("_")[-1])
+            except:
+                return 0
+        
+        checkpoints.sort(key=get_step, reverse=True)
+        return checkpoints[0]
+    
+    def resume_from_latest(self) -> bool:
+        """
+        Resume training from the latest checkpoint.
+        
+        Returns:
+            True if checkpoint was found and loaded
+        """
+        latest = self.find_latest_checkpoint()
+        if latest is None:
+            print("[Trainer] No checkpoint found, starting from scratch")
+            return False
+        
+        print(f"[Trainer] Resuming from checkpoint: {latest}")
+        self.load_checkpoint(latest)
+        return True
+    
     def get_metrics_summary(self) -> Dict[str, float]:
         """Get summary of recent metrics."""
         if not self.metrics_history:
@@ -540,16 +654,21 @@ class RLTrainer:
 
 
 # ============================================================================
-# FULL TRAINING LOOP
+# FULL TRAINING LOOP WITH WEIGHT SYNC
 # ============================================================================
 
 class OnlineRLTrainer:
     """
-    Complete online RL training loop.
+    Complete online RL training loop with weight synchronization.
     
     Alternates between:
     1. Rollout: Collect trajectories using current policy (vLLM)
     2. Training: Update policy using collected data
+    3. Weight Sync: Synchronize vLLM weights with trained HuggingFace model
+    
+    Weight Sync Options:
+    - Option A (checkpoint): Save HF model to disk, reload vLLM from checkpoint
+    - Option B (direct): Use vLLM's update_weights API (if available)
     """
     
     def __init__(
@@ -557,6 +676,8 @@ class OnlineRLTrainer:
         rollout_engine,
         trainer: RLTrainer,
         config: TrainerConfig,
+        weight_sync_method: str = "checkpoint",  # "checkpoint", "direct", or "none"
+        weight_sync_interval: int = 1,  # Sync every N updates
     ):
         """
         Initialize online trainer.
@@ -565,20 +686,77 @@ class OnlineRLTrainer:
             rollout_engine: VLLMRolloutEngine for trajectory collection
             trainer: RLTrainer for policy updates
             config: TrainerConfig
+            weight_sync_method: Method for weight synchronization
+            weight_sync_interval: How often to sync weights
         """
         self.rollout_engine = rollout_engine
         self.trainer = trainer
         self.config = config
+        self.weight_sync_method = weight_sync_method
+        self.weight_sync_interval = weight_sync_interval
         
         # Training state
         self.update_count = 0
         self.all_trajectories = []
+        
+        # Temp dir for weight sync checkpoints
+        self._temp_checkpoint_dir = None
+    
+    def _sync_weights(self) -> bool:
+        """
+        Synchronize weights from trainer to rollout engine.
+        
+        Returns:
+            True if sync was successful
+        """
+        if self.weight_sync_method == "none":
+            return True
+        
+        print(f"[OnlineRL] Syncing weights (method: {self.weight_sync_method})...")
+        
+        if self.weight_sync_method == "direct":
+            # Option B: Direct weight update
+            state_dict = self.trainer.get_state_dict()
+            success = self.rollout_engine.sync_weights_direct(state_dict)
+            
+            if not success:
+                print("[OnlineRL] Direct sync failed, falling back to checkpoint method")
+                self.weight_sync_method = "checkpoint"
+                return self._sync_weights()
+            
+            return True
+        
+        elif self.weight_sync_method == "checkpoint":
+            # Option A: Save checkpoint and reload
+            import tempfile
+            import shutil
+            
+            # Create temp checkpoint directory
+            if self._temp_checkpoint_dir is None:
+                self._temp_checkpoint_dir = Path(tempfile.mkdtemp(prefix="rl_weight_sync_"))
+            
+            checkpoint_path = self._temp_checkpoint_dir / f"sync_step_{self.trainer.global_step}"
+            
+            # Save HF checkpoint
+            self.trainer.save_hf_checkpoint(checkpoint_path)
+            
+            # Reload vLLM from checkpoint
+            success = self.rollout_engine.sync_weights_from_checkpoint(
+                checkpoint_path, cleanup=True
+            )
+            
+            return success
+        
+        else:
+            print(f"[OnlineRL] Unknown weight sync method: {self.weight_sync_method}")
+            return False
     
     def train(
         self,
         questions: List[Dict[str, Any]],
         num_updates: int = 100,
         episodes_per_update: int = 4,
+        scene_loader = None,
     ) -> Dict[str, Any]:
         """
         Run the full online RL training loop.
@@ -587,11 +765,13 @@ class OnlineRLTrainer:
             questions: List of question dicts for training
             num_updates: Number of policy updates
             episodes_per_update: Trajectories to collect per update
+            scene_loader: Optional SceneLoader for rendering
             
         Returns:
             Training summary
         """
         print(f"[OnlineRL] Starting training: {num_updates} updates, {episodes_per_update} episodes/update")
+        print(f"[OnlineRL] Weight sync: {self.weight_sync_method} (every {self.weight_sync_interval} updates)")
         
         for update_idx in range(num_updates):
             print(f"\n{'='*60}")
@@ -602,13 +782,53 @@ class OnlineRLTrainer:
             import random
             sampled = random.sample(questions, min(episodes_per_update, len(questions)))
             
+            # Setup scene loader for each question if provided
+            render_fn = None
+            if scene_loader is not None:
+                # Load scene for first question (batch processing would need enhancement)
+                scene_id = sampled[0].get("scene_id")
+                dataset = sampled[0].get("dataset")
+                
+                try:
+                    scene_loader.load_scene(scene_id, dataset)
+                    scene_loader.compute_initial_pose()
+                    initial_image = scene_loader.render_current_view()
+                    
+                    # Add initial image to questions
+                    for q in sampled:
+                        if q.get("scene_id") == scene_id:
+                            q["initial_image_path"] = str(initial_image)
+                    
+                    # Create render function
+                    from .scene_loader import create_render_fn
+                    render_fn = create_render_fn(scene_loader)
+                except Exception as e:
+                    print(f"[OnlineRL] Scene loading failed: {e}")
+            
             # Collect trajectories
             print("[OnlineRL] Collecting trajectories...")
-            trajectories = self.rollout_engine.collect_batch(sampled)
+            trajectories = self.rollout_engine.collect_batch(sampled, render_fn=render_fn)
+            
+            # Save trajectories to disk
+            print("[OnlineRL] Saving trajectories...")
+            traj_dir = self.trainer.output_dir.parent / "trajectories" / f"update_{update_idx:03d}"
+            traj_dir.mkdir(parents=True, exist_ok=True)
+            
+            for traj_idx, traj in enumerate(trajectories):
+                traj_subdir = traj_dir / f"traj_{traj_idx:02d}"
+                try:
+                    traj.save(traj_subdir)
+                    print(f"[OnlineRL] Saved trajectory {traj_idx} to {traj_subdir}")
+                except Exception as e:
+                    print(f"[OnlineRL] Failed to save trajectory {traj_idx}: {e}")
             
             # Log trajectory stats
             correct = sum(1 for t in trajectories if t.is_correct)
             print(f"[OnlineRL] Collected {len(trajectories)} trajectories, {correct} correct")
+            
+            # Compute rewards (currently binary: 1 for correct, 0 for incorrect)
+            for traj in trajectories:
+                traj.terminal_reward = 1.0 if traj.is_correct else 0.0
             
             # Train on collected data
             print("[OnlineRL] Training...")
@@ -620,6 +840,15 @@ class OnlineRLTrainer:
             
             self.update_count += 1
             self.all_trajectories.extend(trajectories)
+            
+            # Weight sync
+            if self.update_count % self.weight_sync_interval == 0:
+                self._sync_weights()
+        
+        # Cleanup
+        if self._temp_checkpoint_dir and self._temp_checkpoint_dir.exists():
+            import shutil
+            shutil.rmtree(self._temp_checkpoint_dir, ignore_errors=True)
         
         return {
             "num_updates": self.update_count,

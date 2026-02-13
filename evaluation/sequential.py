@@ -16,13 +16,11 @@ Usage:
 """
 
 # CRITICAL: Set multiprocessing start method to 'spawn' BEFORE importing torch/CUDA
-# This fixes: "Cannot re-initialize CUDA in forked subprocess"
 import multiprocessing
-if __name__ == "__main__":
-    try:
-        multiprocessing.set_start_method('spawn', force=True)
-    except RuntimeError:
-        pass  # Already set
+try:
+    multiprocessing.set_start_method('spawn', force=True)
+except RuntimeError:
+    pass  # Already set
 
 import argparse
 import json
@@ -63,6 +61,7 @@ CACHE_DIR = "/dss/dssmcmlfs01/pn34sa/pn34sa-dss-0000/aydemir"
 MODEL_ID = os.environ.get("MODEL_ID", "Qwen/Qwen3-VL-8B-Instruct")
 MESH_BASE_DIR = "/dss/mcmlscratch/06/di38riq/arkit_vsi/raw"
 SCANNET_MESH_BASE_DIR = "/dss/mcmlscratch/06/di38riq/scans"
+SCANNETPP_MESH_BASE_DIR = "/dss/mcmlscratch/06/di38riq/data"
 
 NUM_STEPS = 15  # 15 exploration steps = 16 total images (1 initial + 15 new renders)
 IMAGE_WH = (640, 480)
@@ -74,7 +73,17 @@ INITIAL_VIEW_SELECTION_METRIC = "qwen"  # "visibility", "laplacian", or "qwen"
 
 # Global inference backend (set in main)
 inference_backend = None
-device = "cuda" if torch.cuda.is_available() else "cpu"
+# NOTE: Do NOT check torch.cuda.is_available() here - it initializes CUDA!
+# Instead, set device lazily in main() after vLLM initializes.
+device = None
+
+
+def get_device():
+    """Get device - lazy initialization to avoid CUDA init before vLLM."""
+    global device
+    if device is None:
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+    return device
 
 
 # ----------------- Prompt Builder (kept in main file as requested) -----------------
@@ -104,7 +113,8 @@ def build_instruction_text(R, t, question, bbox=None, options=None, is_final_ste
 
     # Format options as they appear in VSI-Bench
     options_text = ""
-    if options and isinstance(options, (list, dict)):
+    has_options = options and isinstance(options, (list, dict)) and len(options) > 0
+    if has_options:
         options_text = "\n**Answer Options:**\n"
         if isinstance(options, list):
             for opt in options:
@@ -118,13 +128,17 @@ def build_instruction_text(R, t, question, bbox=None, options=None, is_final_ste
     task_description, answer_hint, direction_note = _get_question_type_guidance(question_type)
     
     if is_final_step:
+        if is_numerical:
+            answer_instruction = "- Set \"answer\" to your numerical estimate"
+        else:
+            answer_instruction = "- Set \"answer\" to your choice (A, B, C, or D)"
         movement_instruction = f"""
 **⚠️ FINAL STEP {step_num}/{max_steps} - ANSWER REQUIRED**
 
 You have explored the scene and seen all images from your journey. Based on ALL images you've collected:
 - {answer_hint}
 - Set "done": true in your JSON output
-- Set "answer" to your choice (A, B, C, or D)
+{answer_instruction}
 - Do NOT include any movement commands when done=true
 """
         important_note = f"⚠️ FINAL STEP: Provide your answer now! NO MOVEMENT needed!"
@@ -151,7 +165,7 @@ You have explored the scene and seen all images from your journey. Based on ALL 
 
 ✅ **Decision Point:** When you have enough information to confidently choose the answer:
 - Set "done": true
-- Provide "answer": "A", "B", "C", or "D"
+- Provide "answer": "A", "B", "C", or "D" for MCQ, or a number for numerical questions
 - Do NOT include movement commands
 """
         important_note = f"Step {step_num}/{max_steps} - Focus on the current image and how it connects to your journey!"
@@ -196,7 +210,7 @@ Then output JSON:
   "forward_meters": <-1.0 to 1.0, or 0 if done=true>,
   "left_meters": <-0.5 to 0.5, or 0 if done=true>,
   "z_delta_meters": <-0.3 to 0.3, or 0 if done=true>,
-  "answer": <"A"/"B"/"C"/"D" or null>,
+  "answer": <"A"/"B"/"C"/"D" for MCQ or number for numerical, or null>,
   "done": <true/false>
 }}
 ```
@@ -249,6 +263,48 @@ You need to determine the direction of one object relative to another FROM A SPE
 - Front-left: 45° to your left, Front-right: 45° to your right
 - Back-left: 45° behind you to the left, Back-right: 45° behind you to the right
 """
+    
+    elif question_type == "object_counting":
+        task_description = """**TASK: Object Counting**
+You need to count how many instances of a specific object category appear in the room.
+- Systematically scan the entire room to find ALL instances of the target object
+- Be careful to distinguish between similar objects (e.g., chair vs stool)
+- Count each distinct instance only once (avoid double-counting from different angles)
+- Some objects may be partially visible or in different areas of the room"""
+        answer_hint = "Provide a single integer number (e.g., 3)"
+        direction_note = ""
+    
+    elif question_type == "object_abs_distance":
+        task_description = """**TASK: Absolute Distance Measurement**
+You need to estimate the distance between two specific objects in meters.
+- Locate BOTH objects mentioned in the question
+- Consider the CLOSEST points of each object (not centers)
+- Use visual cues like floor tiles, furniture sizes, or room dimensions for scale
+- Typical room objects for reference: chair height ~0.9m, table height ~0.7m, door height ~2m"""
+        answer_hint = "Provide distance in meters with one decimal place (e.g., 1.5)"
+        direction_note = ""
+    
+    elif question_type == "object_size_estimation":
+        task_description = """**TASK: Object Size Estimation**
+You need to estimate the size of a specific dimension of an object in centimeters.
+- Locate the target object clearly in your views
+- Identify which dimension to measure (length/width/height as specified)
+- Use relative scale from surroundings (doorways ~80cm wide, ceiling height ~240cm)
+- Common object sizes: dining table 70-90cm tall, chair seat 45cm high, sofa 80cm tall"""
+        answer_hint = "Provide size in centimeters as an integer (e.g., 75)"
+        direction_note = ""
+    
+    elif question_type == "room_size_estimation":
+        task_description = """**TASK: Room Size Estimation**
+You need to estimate the total floor area of the room in square meters.
+- Explore to understand the full extent of the room boundaries
+- Estimate length and width dimensions separately
+- Calculate area = length × width
+- For combined spaces, sum the areas of connected regions
+- Reference: Small bedroom ~10-15m², Living room ~20-30m², Large open space ~40-60m²"""
+        answer_hint = "Provide area in square meters with one decimal place (e.g., 25.5)"
+        direction_note = ""
+    
     else:
         task_description = "**TASK: Spatial Reasoning**\nAnalyze the scene to answer the question."
         answer_hint = "Choose the correct option (A, B, C, or D)"
@@ -323,7 +379,7 @@ Respond with ONLY a JSON object:
     messages = [{"role": "user", "content": content}]
     
     # Use the inference backend
-    output_text = inference_backend.generate(messages, max_new_tokens=256)
+    output_text = inference_backend.generate(messages, max_new_tokens=1024)
     
     print(f"[INFO] 🤖 Qwen view selection response: {output_text[:200]}...")
     
@@ -345,14 +401,19 @@ Respond with ONLY a JSON object:
 
 
 # ----------------- Data Loading -----------------
-def load_vsi_bench_questions(dataset="arkitscenes"):
-    """Load VSI-Bench questions with MULTIPLE CHOICE question types only."""
-    if dataset == "combined":
-        # Load both datasets
-        arkit = _load_vsi_bench_questions(question_types=MCA_QUESTION_TYPES, dataset="arkitscenes")
-        scannet = _load_vsi_bench_questions(question_types=MCA_QUESTION_TYPES, dataset="scannet")
-        return arkit + scannet
-    return _load_vsi_bench_questions(question_types=MCA_QUESTION_TYPES, dataset=dataset)
+def load_vsi_bench_questions(dataset="arkitscenes", question_types=None):
+    """Load VSI-Bench questions with specified question types.
+    
+    Args:
+        dataset: Dataset name. Use "all" or "combined" for all datasets together.
+        question_types: List of question types to load. Defaults to MCA_QUESTION_TYPES.
+                       Use ALL_SEQUENTIAL_QUESTION_TYPES for all types.
+    """
+    if question_types is None:
+        question_types = MCA_QUESTION_TYPES
+    
+    # The underlying _load_vsi_bench_questions now handles "all" and "combined"
+    return _load_vsi_bench_questions(question_types=question_types, dataset=dataset)
 
 
 # ----------------- Main Question Runner -----------------
@@ -474,10 +535,30 @@ def run_single_question(mesh_path, question, choices, question_id, experiment_ba
         # Check for answer
         if raw_obj and isinstance(raw_obj, dict):
             answer_value = raw_obj.get("answer")
-            has_answer = answer_value is not None and str(answer_value).strip().upper() in "ABCDEFGHIJ"
+            has_answer = False
+            
+            if answer_value is not None:
+                answer_str = str(answer_value).strip()
+                if is_numerical:
+                    # Try to parse numerical answer
+                    try:
+                        float(answer_str)
+                        has_answer = True
+                        final_answer = answer_str
+                    except ValueError:
+                        # Try to extract number from string
+                        import re
+                        match = re.search(r'-?\d+\.?\d*', answer_str)
+                        if match:
+                            has_answer = True
+                            final_answer = match.group()
+                else:
+                    # MCQ: check for letter answer
+                    if answer_str.upper() in "ABCDEFGHIJ":
+                        has_answer = True
+                        final_answer = answer_str.upper()
             
             if has_answer and done_flag:
-                final_answer = str(answer_value).strip().upper()
                 print(f"[Q{question_id:03d}] ✅ Final answer: {final_answer}")
 
         # If we got an answer and done flag, or if this is the final step, stop
@@ -589,7 +670,7 @@ def _build_history_context(cam_history):
 
 # ----------------- Main Entry Point -----------------
 def main_sequential_split(mesh_base_dir=MESH_BASE_DIR, num_steps_per_question=NUM_STEPS, 
-                          split=1, num_splits=1, continue_from=None, test_mode=False, max_questions=None, dataset="arkitscenes"):
+                          split=1, num_splits=1, continue_from=None, test_mode=False, max_questions=None, dataset="arkitscenes", question_types=None, output_base=None):
     """
     Main loop - fully sequential with job splitting support.
     
@@ -602,6 +683,7 @@ def main_sequential_split(mesh_base_dir=MESH_BASE_DIR, num_steps_per_question=NU
         test_mode: If True, use "test" folder and limit to 1 question
         max_questions: Maximum number of questions to process
         dataset: Dataset name ("arkitscenes" or "scannet")
+        output_base: Override output base directory
     """
     print("\n" + "=" * 80)
     print(f"🚀 VSI-BENCH EVALUATION - {dataset.upper()} (SEQUENTIAL WITH SPLITS)")
@@ -615,8 +697,32 @@ def main_sequential_split(mesh_base_dir=MESH_BASE_DIR, num_steps_per_question=NU
     if dataset == "scannet":
         mesh_base_dir = SCANNET_MESH_BASE_DIR
     
-    questions = load_vsi_bench_questions(dataset=dataset)
+    questions = load_vsi_bench_questions(dataset=dataset, question_types=question_types)
     total_questions = len(questions)
+    
+    # Apply question filter if specified via environment variable
+    # Support three modes:
+    # 1. QUESTION_IDS_FILE: list of [scene_name, question_text] pairs for exact matching
+    # 2. QUESTION_FILTER_FILE: list of scene names (allows multiple questions per scene)
+    ids_file = os.environ.get("QUESTION_IDS_FILE")
+    if ids_file and os.path.exists(ids_file):
+        print(f"[INFO] Applying question ID filter from: {ids_file}")
+        with open(ids_file, 'r') as f:
+            allowed_ids = json.load(f)
+        # Create set of (scene_name, question) tuples for fast lookup
+        allowed_set = set((scene, q) for scene, q in allowed_ids)
+        questions = [q for q in questions if (q["scene_name"], q["question"]) in allowed_set]
+        print(f"[INFO] Filtered to {len(questions)} questions by IDs (from {total_questions})")
+        total_questions = len(questions)
+    else:
+        filter_file = os.environ.get("QUESTION_FILTER_FILE")
+        if filter_file and os.path.exists(filter_file):
+            print(f"[INFO] Applying question filter from: {filter_file}")
+            with open(filter_file, 'r') as f:
+                allowed_scenes = set(json.load(f))
+            questions = [q for q in questions if q["scene_name"] in allowed_scenes]
+            print(f"[INFO] Filtered to {len(questions)} questions (from {total_questions})")
+            total_questions = len(questions)
     
     # Calculate split ranges
     questions_per_split = total_questions // num_splits
@@ -633,21 +739,32 @@ def main_sequential_split(mesh_base_dir=MESH_BASE_DIR, num_steps_per_question=NU
     split_questions = questions[start_idx:end_idx]
     
     if max_questions is not None:
-        split_questions = split_questions[:max_questions]
-        print(f"[INFO] Limited to {max_questions} question(s)\n")
+        import random
+        if len(split_questions) > max_questions:
+            random.seed(int(os.environ.get("RANDOM_SEED", 42)))
+            split_questions = random.sample(split_questions, max_questions)
+            print(f"[INFO] Randomly sampled {max_questions} question(s) from {len(questions[start_idx:end_idx])} (seed={os.environ.get('RANDOM_SEED', 42)})\n")
+        else:
+            split_questions = split_questions[:max_questions]
+            print(f"[INFO] Limited to {max_questions} question(s)\n")
     
     # Determine experiment directory
-    EXPERIMENT_BASE = Path("/dss/dssmcmlfs01/pn34sa/pn34sa-dss-0000/aydemir/experiment_logs")
+    EXPERIMENT_BASE = Path(output_base) if output_base else Path("/dss/dssmcmlfs01/pn34sa/pn34sa-dss-0000/aydemir/experiment_logs")
     if test_mode:
         exp_base_dir = Path("test")
         exp_base_dir.mkdir(parents=True, exist_ok=True)
     elif continue_from:
         exp_base_dir = Path(continue_from)
     else:
+        date_folder = datetime.now().strftime("%Y-%m-%d")
         exp_timestamp = timestamp_str()
         model_name = MODEL_ID.split("/")[-1].replace("-Instruct", "")  # e.g., "Qwen3-VL-8B"
         model_size = "4B" if "4B" in model_name else "8B"
-        exp_base_dir = EXPERIMENT_BASE / "Sequential" / model_size / f"{exp_timestamp}_sequential_{model_name}_{dataset}_split{split}of{num_splits}_{num_steps_per_question}steps"
+        # Infer frame count from num_steps_per_question: 3->4, 7->8, 15->16, 31->32
+        frames_map = {3: 4, 7: 8, 15: 16, 31: 32}
+        num_frames = frames_map.get(num_steps_per_question, num_steps_per_question)
+        frames_folder = f"{num_frames}_frames"
+        exp_base_dir = EXPERIMENT_BASE / "Sequential" / model_size / frames_folder / date_folder / f"{exp_timestamp}_sequential_{model_name}_{dataset}_split{split}of{num_splits}_{num_steps_per_question}steps"
         exp_base_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"[INFO] 📁 Experiment logs: {exp_base_dir.resolve()}\n")
@@ -678,10 +795,12 @@ def main_sequential_split(mesh_base_dir=MESH_BASE_DIR, num_steps_per_question=NU
     for local_idx, q_data in enumerate(split_questions, 1):
         processed_count += 1
         scene_id = q_data["scene_name"]
-        # Use question's source dataset for combined mode
-        q_dataset = q_data.get("dataset", dataset) if dataset == "combined" else dataset
+        # Each question stores its source dataset - use that for combined/all mode
+        q_dataset = q_data.get("dataset", dataset)
         # Set mesh base directory based on question's dataset
-        if q_dataset == "scannet":
+        if q_dataset == "scannetpp":
+            q_mesh_base_dir = SCANNETPP_MESH_BASE_DIR
+        elif q_dataset == "scannet":
             q_mesh_base_dir = SCANNET_MESH_BASE_DIR
         else:
             q_mesh_base_dir = MESH_BASE_DIR
@@ -759,6 +878,7 @@ def main_sequential_split(mesh_base_dir=MESH_BASE_DIR, num_steps_per_question=NU
         csv_rows.append({
             "question_id": f"q{processed_count:03d}",
             "scene_id": scene_id,
+            "dataset": q_data.get("dataset", dataset),
             "question_type": q_data["question_type"],
             "is_numerical": is_numerical,
             "gt_answer": ground_truth,
@@ -812,10 +932,11 @@ def initialize_backend(backend_type: str = "hf"):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run VSI-Bench reasoning loop (sequential, with job splitting)")
-    parser.add_argument("--backend", type=str, default="hf", choices=["hf", "vllm"],
-                       help="Inference backend: 'hf' (HuggingFace, default) or 'vllm' (faster)")
-    parser.add_argument("--dataset", type=str, default="arkitscenes", choices=["arkitscenes", "scannet", "combined"],
-                       help="Dataset to evaluate on (default: arkitscenes, use 'combined' for both)")
+    parser.add_argument("--backend", type=str, default="vllm", choices=["hf", "vllm"],
+                       help="Inference backend: 'vllm' (default, faster) or 'hf' (HuggingFace)")
+    parser.add_argument("--dataset", type=str, default="arkitscenes", 
+                       choices=["arkitscenes", "scannet", "scannetpp", "all", "combined"],
+                       help="Dataset to evaluate on. Use 'all' for all datasets combined.")
     parser.add_argument("--steps", type=int, default=NUM_STEPS, help="Number of reasoning steps per question")
     parser.add_argument("--split", type=int, default=1, help="Which split to run (1-indexed)")
     parser.add_argument("--num-splits", type=int, default=1, help="Total number of splits")
@@ -823,7 +944,21 @@ if __name__ == "__main__":
                        help="Resume from experiment folder and skip completed questions")
     parser.add_argument("--test", action="store_true", help="Test mode: run 1 question to 'test' folder")
     parser.add_argument("--max-questions", type=int, default=None, help="Maximum number of questions to process")
+    parser.add_argument("--question-types", type=str, default="mcq", choices=["mcq", "numerical", "all"],
+                       help="Question types: 'mcq' (default), 'numerical', or 'all' (mcq + numerical)")
+    parser.add_argument("--output-base", type=str, default=None,
+                       help="Override output base directory (default: experiment_logs)")
     args = parser.parse_args()
+    
+    # Map question-types argument to actual types
+    if args.question_types == "mcq":
+        question_types = MCA_QUESTION_TYPES
+    elif args.question_types == "numerical":
+        from utils import NUMERICAL_QUESTION_TYPES
+        question_types = NUMERICAL_QUESTION_TYPES
+    else:  # all
+        from utils import ALL_SEQUENTIAL_QUESTION_TYPES
+        question_types = ALL_SEQUENTIAL_QUESTION_TYPES
 
     if not args.test and (args.split < 1 or args.split > args.num_splits):
         print(f"[ERROR] Invalid split: {args.split}. Must be between 1 and {args.num_splits}")
@@ -841,7 +976,9 @@ if __name__ == "__main__":
             continue_from=None,
             test_mode=True,
             max_questions=5,
-            dataset=args.dataset
+            dataset=args.dataset,
+            question_types=question_types,
+            output_base=args.output_base
         )
     else:
         print(f"[INFO] Running split {args.split} of {args.num_splits} on {args.dataset}")
@@ -852,6 +989,8 @@ if __name__ == "__main__":
             continue_from=args.continue_from,
             test_mode=False,
             max_questions=args.max_questions,
-            dataset=args.dataset
+            dataset=args.dataset,
+            question_types=question_types,
+            output_base=args.output_base
         )
 

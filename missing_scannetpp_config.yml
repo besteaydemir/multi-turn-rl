@@ -1,0 +1,35 @@
+token: Ap3ukhSo33grVF2LtMVLCRmuJIHN64TACbDmvF3pOPO0VWLbJZ09wYlHpNQkb1D0
+data_root: /dss/mcmlscratch/06/di38riq/data
+root_url: https://scannetpp.mlsg.cit.tum.de/scannetpp/download/v2?version=v1&token=TOKEN&file=FILEPATH
+
+# Only download the two missing scenes
+download_scenes:
+- '3864514494'
+- '5942004064'
+
+# Download minimal assets needed for VSI-Bench evaluation
+download_assets:
+- scan_mesh_path
+- dslr_resized_undistorted
+
+# Technical settings
+dry_run: false
+verbose: true
+metadata_only: false
+
+# Asset definitions (from default config)
+meta_files: []
+
+splits:
+- missing
+
+zipped_assets:
+- dslr_resized_undistorted
+
+default_assets:
+- scan_mesh_path
+- dslr_resized_undistorted
+
+option_assets: {}
+
+exclude_assets: {}

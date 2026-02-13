@@ -1,0 +1,71 @@
+# Default training hyper-parameters
+# Override with --config <your.yaml> or CLI flags.
+
+# ── Model ──
+model_id: "Qwen/Qwen3-VL-8B-Instruct"
+cache_dir: "/dss/dssmcmlfs01/pn34sa/pn34sa-dss-0000/aydemir"
+
+# ── Environment ──
+env:
+  max_steps: 15                # exploration steps (total images = max_steps + 1)
+  image_wh: [640, 480]
+  fx_fy: 300.0
+  cam_height: 1.6
+  initial_view_selection: "visibility"   # "visibility" | "laplacian" | "random"
+  datasets:
+    - "arkitscenes"
+    - "scannet"
+    - "scannetpp"
+  question_types: "mcq"        # "mcq" | "numerical" | "all"
+  mesh_base_dirs:
+    arkitscenes: "/dss/mcmlscratch/06/di38riq/arkit_vsi/raw"
+    scannet: "/dss/mcmlscratch/06/di38riq/scans"
+    scannetpp: "/dss/mcmlscratch/06/di38riq/data"
+
+# ── Rollout ──
+rollout:
+  episodes_per_update: 8
+  temperature: 0.7
+  top_p: 0.9
+  max_new_tokens: 1024
+
+# ── PPO ──
+ppo:
+  clip_eps: 0.2
+  entropy_coef: 0.01
+  kl_coef: 0.05
+  ppo_epochs: 4
+  mini_batch_size: 4
+  gamma: 1.0
+  gae_lambda: 0.95
+
+# ── Optimisation ──
+optim:
+  lr: 1.0e-5
+  weight_decay: 0.01
+  max_grad_norm: 1.0
+  warmup_steps: 50
+  gradient_accumulation_steps: 4
+
+# ── Training loop ──
+training:
+  num_updates: 500
+  save_interval: 50
+  log_interval: 1
+  eval_interval: 50
+  eval_episodes: 16
+
+# ── Rewards ──
+rewards:
+  correct_answer: 1.0
+  wrong_answer: -0.5
+  no_answer: -1.0
+  format_penalty: -0.1       # bad JSON
+  step_penalty: 0.0          # per-step cost (0 = disabled)
+
+# ── Logging ──
+logging:
+  output_dir: "./checkpoints/vagen_vsi_rl"
+  wandb_project: "vagen-vsi-rl"
+  wandb_entity: null
+  use_wandb: false

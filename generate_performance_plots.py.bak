@@ -1,0 +1,481 @@
+#!/usr/bin/env python3
+"""
+Generate performance comparison plots for Sequential vs Video evaluation.
+Aggregates results across all runs, handles duplicates, and creates comparison plots.
+
+Scoring logic (from evaluation/sequential.py and utils/evaluation.py):
+  - Numerical questions (object_counting, object_abs_distance, object_size_estimation,
+    room_size_estimation): MRA score in [0,1]; correct if MRA > 0.5
+  - MCA questions (object_rel_distance, object_rel_direction_*, route_planning):
+    mra_score is None/NaN; correct if model_answer == gt_answer (exact match)
+"""
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from pathlib import Path
+import sys
+from collections import defaultdict
+
+sys.path.insert(0, str(Path(__file__).parent))
+from utils.evaluation import calculate_mra
+
+# Paths
+BASE_DIR = Path("/dss/dssmcmlfs01/pn34sa/pn34sa-dss-0000/aydemir/experiment_logs")
+BASE_DIR_SCRATCH = Path("/dss/mcmlscratch/06/di38riq/experiment_logs")
+OUTPUT_DIR = Path("/dss/dsshome1/06/di38riq/rl_multi_turn/analysis")
+OUTPUT_DIR.mkdir(exist_ok=True)
+
+# Configuration
+EVAL_TYPES = ["Sequential", "Video"]
+MODELS = ["4B", "8B"]
+FRAMES = [4, 8, 16, 32]
+
+# Question type display names
+QUESTION_TYPE_NAMES = {
+    'route_planning': 'Route Planning',
+    'object_rel_distance': 'Obj Rel Dist',
+    'object_rel_direction_easy': 'Obj Rel Dir (E)',
+    'object_rel_direction_medium': 'Obj Rel Dir (M)',
+    'object_rel_direction_hard': 'Obj Rel Dir (H)',
+    'object_counting': 'Obj Counting',
+    'object_abs_distance': 'Obj Abs Dist',
+    'object_size_estimation': 'Obj Size Est',
+    'room_size_estimation': 'Room Size Est',
+    'obj_appearance_order': 'Obj Appear Order',
+}
+
+# Question type classification
+MCA_QUESTION_TYPES = [
+    'object_rel_distance',
+    'object_rel_direction_easy',
+    'object_rel_direction_medium',
+    'object_rel_direction_hard',
+    'route_planning',
+    'obj_appearance_order',
+]
+NUMERICAL_QUESTION_TYPES = [
+    'object_counting',
+    'object_abs_distance',
+    'object_size_estimation',
+    'room_size_estimation',
+]
+
+
+def aggregate_results_for_config(eval_type, model, frames):
+    """
+    Aggregate all results for a specific configuration.
+    Handles duplicates by keeping the first occurrence of each (scene_id, question) pair.
+    Recomputes scores where missing.
+    """
+    frames_dir = f"{frames}_frames"
+    config_paths = [
+        BASE_DIR / eval_type / model / frames_dir,
+        BASE_DIR_SCRATCH / eval_type / model / frames_dir,
+    ]
+
+    # Check if any config path exists
+    existing_paths = [p for p in config_paths if p.exists()]
+    if not existing_paths:
+        print(f"[WARNING] No config paths exist for {eval_type}/{model}/{frames}f")
+        return None
+
+    print(f"\n[INFO] Processing {eval_type}/{model}/{frames}f...")
+
+    all_rows = []
+    seen_pairs = set()
+    duplicate_count = 0
+
+    for config_path in existing_paths:
+        print(f"  Scanning {config_path}")
+        for date_dir in sorted(config_path.iterdir()):
+            if not date_dir.is_dir() or not date_dir.name.startswith("20"):
+                continue
+            for run_dir in sorted(date_dir.iterdir()):
+                if not run_dir.is_dir():
+                    continue
+                results_file = run_dir / "results.csv"
+                if not results_file.exists():
+                    continue
+                try:
+                    df = pd.read_csv(results_file)
+                    print(f"  + {run_dir.name}: {len(df)} rows")
+                    for _, row in df.iterrows():
+                        scene_id = str(row.get('scene_id', ''))
+                        question = str(row.get('question', ''))
+                        pair = (scene_id, question)
+                        if pair not in seen_pairs:
+                            seen_pairs.add(pair)
+                            all_rows.append(row.to_dict())
+                        else:
+                            duplicate_count += 1
+                except Exception as e:
+                    print(f"  ✗ Error reading {results_file}: {e}")
+
+    if not all_rows:
+        return None
+
+    result_df = pd.DataFrame(all_rows)
+
+    # ---- (Re)compute is_correct and mra_score ----
+    recomputed_mra = 0
+    is_correct_list = []
+    mra_list = []
+
+    for _, row in result_df.iterrows():
+        gt = str(row['gt_answer']).strip()
+        pred = str(row['model_answer']).strip()
+        qtype = row['question_type']
+        is_num = qtype in NUMERICAL_QUESTION_TYPES
+
+        if is_num and pred != 'NO_ANSWER' and pred != '0' * 10:
+            try:
+                pred_val = float(pred)
+                gt_val = float(gt)
+                mra = calculate_mra(pred_val, gt_val)
+                correct = bool(mra > 0.5)
+            except (ValueError, TypeError):
+                mra = 0.0
+                correct = False
+        elif is_num:
+            mra = 0.0
+            correct = False
+        else:
+            mra = np.nan  # Not applicable for MCA
+            correct = (pred.upper() == gt.upper())
+
+        is_correct_list.append(correct)
+
+        # Use existing mra_score if available, otherwise use computed
+        existing_mra = row.get('mra_score')
+        if is_num and (pd.isna(existing_mra)):
+            mra_list.append(mra)
+            recomputed_mra += 1
+        else:
+            mra_list.append(existing_mra if is_num else np.nan)
+
+    result_df['is_correct'] = is_correct_list
+    result_df['mra_score'] = mra_list
+
+    print(f"[INFO] Unique questions: {len(result_df)}, duplicates removed: {duplicate_count}")
+    if recomputed_mra:
+        print(f"[INFO] Recomputed {recomputed_mra} missing MRA scores")
+
+    # Save
+    csv_output = OUTPUT_DIR / f"{eval_type}_{model}_{frames}f_aggregated.csv"
+    result_df.to_csv(csv_output, index=False)
+    print(f"[INFO] Saved: {csv_output}")
+    return result_df
+
+
+def calc_metrics(df, question_type=None):
+    """
+    Calculate MCA accuracy and mean MRA separately.
+    
+    MCA Accuracy: fraction of MCA questions answered correctly (exact match).
+    MRA: mean continuous mra_score over numerical questions only (NOT binarized).
+    """
+    if df is None or len(df) == 0:
+        return None, None
+
+    if question_type:
+        df = df[df['question_type'] == question_type]
+        if len(df) == 0:
+            return None, None
+
+    # Split into MCA and numerical subsets
+    mca_df = df[df['question_type'].isin(MCA_QUESTION_TYPES)]
+    num_df = df[df['question_type'].isin(NUMERICAL_QUESTION_TYPES)]
+
+    # If filtering by a specific question type, use appropriate metric
+    if question_type:
+        if question_type in MCA_QUESTION_TYPES:
+            accuracy = mca_df['is_correct'].sum() / len(mca_df) * 100 if len(mca_df) > 0 else None
+            return accuracy, None
+        elif question_type in NUMERICAL_QUESTION_TYPES:
+            num_scores = num_df['mra_score'].dropna()
+            mra = num_scores.mean() * 100 if len(num_scores) > 0 else None
+            return None, mra
+
+    # Overall: MCA accuracy and numerical MRA computed separately
+    mca_acc = mca_df['is_correct'].sum() / len(mca_df) * 100 if len(mca_df) > 0 else None
+    num_scores = num_df['mra_score'].dropna()
+    mra = num_scores.mean() * 100 if len(num_scores) > 0 else None
+
+    return mca_acc, mra
+
+
+def generate_comparison_plots():
+    print("=" * 80)
+    print("GENERATING PERFORMANCE COMPARISON PLOTS")
+    print("=" * 80)
+
+    # ---- Step 1: Aggregate all results ----
+    results = {}
+    for eval_type in EVAL_TYPES:
+        for model in MODELS:
+            for frames in FRAMES:
+                results[(eval_type, model, frames)] = aggregate_results_for_config(eval_type, model, frames)
+
+    # Collect question types
+    all_qtypes = set()
+    for df in results.values():
+        if df is not None and 'question_type' in df.columns:
+            all_qtypes.update(df['question_type'].unique())
+    question_types = sorted(all_qtypes)
+    print(f"\n[INFO] Question types: {question_types}")
+
+    # ---- Step 2: Build metric tables ----
+    overall = defaultdict(lambda: {'accuracy': [], 'mra': []})
+    by_cat = {qt: defaultdict(lambda: {'accuracy': [], 'mra': []}) for qt in question_types}
+
+    for eval_type in EVAL_TYPES:
+        for model in MODELS:
+            for frames in FRAMES:
+                df = results.get((eval_type, model, frames))
+                a, m = calc_metrics(df)
+                overall[(eval_type, model)]['accuracy'].append((frames, a))
+                overall[(eval_type, model)]['mra'].append((frames, m))
+                for qt in question_types:
+                    a2, m2 = calc_metrics(df, question_type=qt)
+                    by_cat[qt][(eval_type, model)]['accuracy'].append((frames, a2))
+                    by_cat[qt][(eval_type, model)]['mra'].append((frames, m2))
+
+    # ---- Print summary ----
+    print("\n" + "=" * 90)
+    print(f"{'Config':<22} {'N':<7} {'MCA Acc (%)':<15} {'Mean MRA (%)':<15}")
+    print("-" * 70)
+    for eval_type in EVAL_TYPES:
+        for model in MODELS:
+            for frames in FRAMES:
+                df = results.get((eval_type, model, frames))
+                if df is not None:
+                    a, m = calc_metrics(df)
+                    a_s = f"{a:.2f}" if a is not None else "N/A"
+                    m_s = f"{m:.2f}" if m is not None else "N/A"
+                    print(f"  {eval_type:>10} {model} {frames:2d}f   {len(df):<7} {a_s:<15} {m_s:<15}")
+        print()
+    print("=" * 90)
+
+    # ---- Plotting helpers ----
+    colors = {'4B': '#1f77b4', '8B': '#d62728'}
+    ls = {'Sequential': '-', 'Video': '--'}
+    mk = {'Sequential': 'o', 'Video': 's'}
+
+    def _draw(ax, metric_dict, key):
+        for et in EVAL_TYPES:
+            for mdl in MODELS:
+                pts = [(f, v) for f, v in metric_dict[(et, mdl)][key] if v is not None]
+                if pts:
+                    xs, ys = zip(*pts)
+                    ax.plot(xs, ys, marker=mk[et], linewidth=2.5, markersize=8,
+                            color=colors[mdl], linestyle=ls[et],
+                            label=f"{mdl} {et}")
+
+    # ---- Figure 1: Overall Accuracy ----
+    fig, ax = plt.subplots(figsize=(10, 6))
+    _draw(ax, overall, 'accuracy')
+    ax.set_xlabel('Number of Frames', fontsize=14)
+    ax.set_ylabel('MCA Accuracy (%)', fontsize=14)
+    ax.set_title('MCA Accuracy: Sequential vs Video', fontsize=16, fontweight='bold')
+    ax.legend(fontsize=12); ax.grid(True, alpha=0.3); ax.set_xticks(FRAMES)
+    plt.tight_layout()
+    p = OUTPUT_DIR / "overall_accuracy_comparison.png"
+    plt.savefig(p, dpi=300, bbox_inches='tight'); plt.close()
+    print(f"[SAVED] {p}")
+
+    # ---- Figure 2: Overall MRA ----
+    fig, ax = plt.subplots(figsize=(10, 6))
+    _draw(ax, overall, 'mra')
+    ax.set_xlabel('Number of Frames', fontsize=14)
+    ax.set_ylabel('Mean MRA (%)', fontsize=14)
+    ax.set_title('Overall MRA: Sequential vs Video (Numerical Qs)', fontsize=16, fontweight='bold')
+    ax.legend(fontsize=12); ax.grid(True, alpha=0.3); ax.set_xticks(FRAMES)
+    plt.tight_layout()
+    p = OUTPUT_DIR / "overall_mra_comparison.png"
+    plt.savefig(p, dpi=300, bbox_inches='tight'); plt.close()
+    print(f"[SAVED] {p}")
+
+    # ---- Figure 3: Per-category Accuracy (all types) ----
+    n = len(question_types); ncols = 3; nrows = (n + ncols - 1) // ncols
+    fig, axes = plt.subplots(nrows, ncols, figsize=(18, 5 * nrows))
+    axes_flat = axes.flatten()
+    for i, qt in enumerate(question_types):
+        ax = axes_flat[i]
+        # Use 'accuracy' for MCA types, 'mra' for numerical types
+        metric_key = 'mra' if qt in NUMERICAL_QUESTION_TYPES else 'accuracy'
+        for et in EVAL_TYPES:
+            for mdl in MODELS:
+                pts = [(f, v) for f, v in by_cat[qt][(et, mdl)][metric_key] if v is not None]
+                if pts:
+                    xs, ys = zip(*pts)
+                    ax.plot(xs, ys, marker=mk[et], linewidth=2, color=colors[mdl],
+                            linestyle=ls[et], label=f"{mdl} {et}")
+        ylabel = 'Mean MRA (%)' if qt in NUMERICAL_QUESTION_TYPES else 'Accuracy (%)'
+        ax.set_title(QUESTION_TYPE_NAMES.get(qt, qt), fontsize=12, fontweight='bold')
+        ax.set_xlabel('Frames'); ax.set_ylabel(ylabel)
+        ax.legend(fontsize=7); ax.grid(True, alpha=0.3); ax.set_xticks(FRAMES)
+    for i in range(n, len(axes_flat)):
+        axes_flat[i].axis('off')
+    fig.suptitle('Per-Category Scores (MCA Acc / Numerical MRA)', fontsize=18, fontweight='bold', y=1.00)
+    plt.tight_layout()
+    p = OUTPUT_DIR / "category_accuracy_comparison.png"
+    plt.savefig(p, dpi=300, bbox_inches='tight'); plt.close()
+    print(f"[SAVED] {p}")
+
+    # ---- Figure 4: Per-category MRA (numerical types only) ----
+    num_types = [qt for qt in question_types if qt in NUMERICAL_QUESTION_TYPES]
+    nn = len(num_types); nc2 = min(nn, 3); nr2 = max(1, (nn + nc2 - 1) // nc2)
+    fig, axes = plt.subplots(nr2, nc2, figsize=(6 * nc2, 5 * nr2))
+    if nn == 1:
+        axes_flat = [axes]
+    elif nn <= nc2:
+        axes_flat = list(axes) if hasattr(axes, '__iter__') else [axes]
+    else:
+        axes_flat = axes.flatten()
+    for i, qt in enumerate(num_types):
+        ax = axes_flat[i]
+        for et in EVAL_TYPES:
+            for mdl in MODELS:
+                pts = [(f, v) for f, v in by_cat[qt][(et, mdl)]['mra'] if v is not None]
+                if pts:
+                    xs, ys = zip(*pts)
+                    ax.plot(xs, ys, marker=mk[et], linewidth=2, color=colors[mdl],
+                            linestyle=ls[et], label=f"{mdl} {et}")
+        ax.set_title(QUESTION_TYPE_NAMES.get(qt, qt), fontsize=12, fontweight='bold')
+        ax.set_xlabel('Frames'); ax.set_ylabel('Mean MRA (%)')
+        ax.legend(fontsize=8); ax.grid(True, alpha=0.3); ax.set_xticks(FRAMES)
+    for i in range(nn, len(axes_flat)):
+        axes_flat[i].axis('off')
+    fig.suptitle('MRA by Numerical Question Category', fontsize=18, fontweight='bold', y=1.00)
+    plt.tight_layout()
+    p = OUTPUT_DIR / "category_mra_comparison.png"
+    plt.savefig(p, dpi=300, bbox_inches='tight'); plt.close()
+    print(f"[SAVED] {p}")
+
+    # ---- Figures 5 & 6: Stacked bar charts — 4x2 grid per model ----
+    # Each subplot = one (combined) question type.
+    # x-axis = frames, y-axis = percentage, stacked bars: correct / wrong / no_answer
+    # Combine object_rel_direction_easy/medium/hard into one "Obj Rel Direction"
+
+    COMBINED_QT_ORDER = [
+        'route_planning',
+        'object_rel_distance',
+        'object_rel_direction',   # combined
+        'object_counting',
+        'object_abs_distance',
+        'object_size_estimation',
+        'room_size_estimation',
+        'obj_appearance_order',
+    ]
+    COMBINED_QT_NAMES = {
+        'route_planning':         'Route Planning',
+        'object_rel_distance':    'Obj Rel Distance',
+        'object_rel_direction':   'Obj Rel Direction',
+        'object_counting':        'Obj Counting',
+        'object_abs_distance':    'Obj Abs Distance',
+        'object_size_estimation': 'Obj Size Estimation',
+        'room_size_estimation':   'Room Size Estimation',
+        'obj_appearance_order':   'Obj Appear Order',
+    }
+    DIRECTION_TYPES = {'object_rel_direction_easy',
+                       'object_rel_direction_medium',
+                       'object_rel_direction_hard'}
+
+    def _map_qt(qt):
+        """Map raw question type to combined type."""
+        return 'object_rel_direction' if qt in DIRECTION_TYPES else qt
+
+    for model in MODELS:
+        # Determine which combined types actually appear for this model
+        present_types = set()
+        for frames in FRAMES:
+            df = results.get(('Sequential', model, frames))
+            if df is not None:
+                present_types.update(df['question_type'].map(_map_qt).unique())
+        qt_order = [qt for qt in COMBINED_QT_ORDER if qt in present_types]
+
+        nrows, ncols = 4, 2
+        fig, axes = plt.subplots(nrows, ncols, figsize=(12, 16))
+        axes_flat = axes.flatten()
+
+        for i, qt in enumerate(qt_order):
+            ax = axes_flat[i]
+            correct_pcts = []
+            wrong_pcts = []
+            na_pcts = []
+            frame_labels = []
+
+            for frames in FRAMES:
+                df = results.get(('Sequential', model, frames))
+                if df is None:
+                    correct_pcts.append(0); wrong_pcts.append(0); na_pcts.append(0)
+                    frame_labels.append(str(frames))
+                    continue
+
+                # Select rows for this combined question type
+                mask = df['question_type'].map(_map_qt) == qt
+                sub = df[mask]
+                n_total = len(sub)
+                if n_total == 0:
+                    correct_pcts.append(0); wrong_pcts.append(0); na_pcts.append(0)
+                    frame_labels.append(str(frames))
+                    continue
+
+                n_no_answer = int((sub['model_answer'].astype(str).str.upper() == 'NO_ANSWER').sum())
+                n_correct = int(sub['is_correct'].sum())
+                n_wrong = n_total - n_correct - n_no_answer
+
+                correct_pcts.append(n_correct / n_total * 100)
+                wrong_pcts.append(n_wrong / n_total * 100)
+                na_pcts.append(n_no_answer / n_total * 100)
+                frame_labels.append(str(frames))
+
+            x = np.arange(len(FRAMES))
+            width = 0.55
+
+            ax.bar(x, correct_pcts, width, color='#4CAF50', label='Correct')
+            ax.bar(x, wrong_pcts, width, bottom=correct_pcts, color='#F44336', label='Wrong')
+            bottom2 = [c + w for c, w in zip(correct_pcts, wrong_pcts)]
+            ax.bar(x, na_pcts, width, bottom=bottom2, color='#9E9E9E', label='No Answer')
+
+            ax.set_xticks(x)
+            ax.set_xticklabels(frame_labels, fontsize=10)
+            ax.set_xlabel('Frames', fontsize=10)
+            ax.set_ylabel('Percentage (%)', fontsize=10)
+            ax.set_ylim(0, 105)
+            ax.set_title(COMBINED_QT_NAMES.get(qt, qt), fontsize=12, fontweight='bold')
+
+            # Add percentage labels on the bars
+            for j in range(len(FRAMES)):
+                # Correct label (bottom segment)
+                if correct_pcts[j] > 5:
+                    ax.text(x[j], correct_pcts[j] / 2, f'{correct_pcts[j]:.0f}%',
+                            ha='center', va='center', fontsize=8, fontweight='bold', color='white')
+                # No-answer label (top segment)
+                if na_pcts[j] > 5:
+                    ax.text(x[j], bottom2[j] + na_pcts[j] / 2, f'{na_pcts[j]:.0f}%',
+                            ha='center', va='center', fontsize=8, fontweight='bold', color='white')
+
+            if i == 0:
+                ax.legend(fontsize=8, loc='upper right')
+
+        # Hide unused subplots
+        for i in range(len(qt_order), len(axes_flat)):
+            axes_flat[i].axis('off')
+
+        fig.suptitle(f'Sequential {model} — Answer Breakdown by Question Type',
+                     fontsize=16, fontweight='bold')
+        plt.tight_layout(rect=[0, 0, 1, 0.97])
+        p = OUTPUT_DIR / f"answer_breakdown_{model}.png"
+        plt.savefig(p, dpi=300, bbox_inches='tight')
+        plt.close()
+        print(f"[SAVED] {p}")
+
+    print("\n" + "=" * 80)
+    print("DONE – 6 plots + 16 aggregated CSVs saved to:", OUTPUT_DIR)
+    print("=" * 80)
+
+
+if __name__ == "__main__":
+    generate_comparison_plots()
